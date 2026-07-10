@@ -126,6 +126,8 @@ pub struct PaneAgentSessionSnapshot {
     pub agent: String,
     pub kind: crate::agent_resume::AgentSessionRefKind,
     pub value: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub access: Option<crate::agent_resume::AgentResumeAccess>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -351,6 +353,7 @@ fn capture_tab(
             .unwrap_or_default();
         let launch_argv = terminal.and_then(|terminal| terminal.launch_argv.clone());
         let agent_session = terminal.and_then(|terminal| {
+            let runtime = terminal_id.and_then(|id| terminal_runtimes.get(id));
             if let Some(authority) = terminal.hook_authority.as_ref() {
                 if let Some(session_ref) = authority.session_ref.as_ref() {
                     return Some(PaneAgentSessionSnapshot {
@@ -358,6 +361,12 @@ fn capture_tab(
                         agent: authority.agent_label.clone(),
                         kind: session_ref.kind,
                         value: session_ref.value.clone(),
+                        access: capture_resume_access(
+                            terminal,
+                            runtime,
+                            &authority.source,
+                            &authority.agent_label,
+                        ),
                     });
                 }
             }
@@ -369,6 +378,12 @@ fn capture_tab(
                     agent: session.agent.clone(),
                     kind: session.session_ref.kind,
                     value: session.session_ref.value.clone(),
+                    access: capture_resume_access(
+                        terminal,
+                        runtime,
+                        &session.source,
+                        &session.agent,
+                    ),
                 })
         });
         let agent_resume = terminal
@@ -411,6 +426,30 @@ pub(super) fn layout_fingerprint(snapshot: &SessionSnapshot) -> Option<String> {
     value["collapsed_space_keys"] = serde_json::to_value(collapsed).ok()?;
     let bytes = serde_json::to_vec(&value).ok()?;
     Some(format!("{:x}", Sha256::digest(bytes)))
+}
+
+fn capture_resume_access(
+    terminal: &crate::terminal::TerminalState,
+    runtime: Option<&crate::terminal::TerminalRuntime>,
+    source: &str,
+    agent: &str,
+) -> Option<crate::agent_resume::AgentResumeAccess> {
+    terminal
+        .launch_argv
+        .as_deref()
+        .and_then(|argv| crate::agent_resume::access_from_argv(source, agent, argv))
+        .or_else(|| {
+            runtime
+                .and_then(|runtime| runtime.child_pid())
+                .and_then(crate::detect::foreground_job)
+                .and_then(|job| {
+                    job.processes.into_iter().find_map(|process| {
+                        process.argv.as_deref().and_then(|argv| {
+                            crate::agent_resume::access_from_argv(source, agent, argv)
+                        })
+                    })
+                })
+        })
 }
 
 /// Capture pane screen history separately from the structural session snapshot.
