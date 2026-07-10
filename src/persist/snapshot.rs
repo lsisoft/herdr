@@ -113,6 +113,8 @@ pub struct PaneAgentSessionSnapshot {
     pub agent: String,
     pub kind: crate::agent_resume::AgentSessionRefKind,
     pub value: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub access: Option<crate::agent_resume::AgentResumeAccess>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -334,30 +336,41 @@ fn capture_tab(
             .get(id)
             .and_then(|pane| terminals.get(&pane.attached_terminal_id))
             .and_then(|terminal| terminal.launch_argv.clone());
-        let agent_session =
-            tab.panes
-                .get(id)
-                .and_then(|pane| terminals.get(&pane.attached_terminal_id))
-                .and_then(|terminal| {
-                    if let Some(authority) = terminal.hook_authority.as_ref() {
-                        if let Some(session_ref) = authority.session_ref.as_ref() {
-                            return Some(PaneAgentSessionSnapshot {
-                                source: authority.source.clone(),
-                                agent: authority.agent_label.clone(),
-                                kind: session_ref.kind,
-                                value: session_ref.value.clone(),
-                            });
-                        }
-                    }
-                    terminal.persisted_agent_session.as_ref().map(|session| {
-                        PaneAgentSessionSnapshot {
-                            source: session.source.clone(),
-                            agent: session.agent.clone(),
-                            kind: session.session_ref.kind,
-                            value: session.session_ref.value.clone(),
-                        }
-                    })
-                });
+        let agent_session = tab.panes.get(id).and_then(|pane| {
+            let terminal = terminals.get(&pane.attached_terminal_id)?;
+            let runtime = terminal_runtimes.get(&pane.attached_terminal_id);
+            if let Some(authority) = terminal.hook_authority.as_ref() {
+                if let Some(session_ref) = authority.session_ref.as_ref() {
+                    return Some(PaneAgentSessionSnapshot {
+                        source: authority.source.clone(),
+                        agent: authority.agent_label.clone(),
+                        kind: session_ref.kind,
+                        value: session_ref.value.clone(),
+                        access: capture_resume_access(
+                            terminal,
+                            runtime,
+                            &authority.source,
+                            &authority.agent_label,
+                        ),
+                    });
+                }
+            }
+            terminal
+                .persisted_agent_session
+                .as_ref()
+                .map(|session| PaneAgentSessionSnapshot {
+                    source: session.source.clone(),
+                    agent: session.agent.clone(),
+                    kind: session.session_ref.kind,
+                    value: session.session_ref.value.clone(),
+                    access: capture_resume_access(
+                        terminal,
+                        runtime,
+                        &session.source,
+                        &session.agent,
+                    ),
+                })
+        });
         panes.insert(
             id.raw(),
             PaneSnapshot {
@@ -377,6 +390,30 @@ fn capture_tab(
         focused: Some(tab.layout.focused().raw()),
         root_pane: Some(tab.root_pane.raw()),
     }
+}
+
+fn capture_resume_access(
+    terminal: &crate::terminal::TerminalState,
+    runtime: Option<&crate::terminal::TerminalRuntime>,
+    source: &str,
+    agent: &str,
+) -> Option<crate::agent_resume::AgentResumeAccess> {
+    terminal
+        .launch_argv
+        .as_deref()
+        .and_then(|argv| crate::agent_resume::access_from_argv(source, agent, argv))
+        .or_else(|| {
+            runtime
+                .and_then(|runtime| runtime.child_pid())
+                .and_then(crate::detect::foreground_job)
+                .and_then(|job| {
+                    job.processes.into_iter().find_map(|process| {
+                        process.argv.as_deref().and_then(|argv| {
+                            crate::agent_resume::access_from_argv(source, agent, argv)
+                        })
+                    })
+                })
+        })
 }
 
 /// Capture pane screen history separately from the structural session snapshot.

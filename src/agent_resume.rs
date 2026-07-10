@@ -25,6 +25,18 @@ pub struct AgentResumePlan {
     pub dedupe_key: String,
 }
 
+/// Allow-listed, non-secret permission arguments that can be reapplied after
+/// a native session restore. Arbitrary argv, config overrides, and environment
+/// values are intentionally excluded.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "provider", content = "args", rename_all = "snake_case")]
+pub enum AgentResumeAccess {
+    Codex(Vec<String>),
+    Claude(Vec<String>),
+    Copilot(Vec<String>),
+    Opencode(Vec<String>),
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PersistedAgentSession {
     pub source: String,
@@ -113,6 +125,15 @@ pub fn session_ref_from_snapshot(
 }
 
 pub fn plan(source: &str, agent: &str, session_ref: &AgentSessionRef) -> Option<AgentResumePlan> {
+    plan_with_access(source, agent, session_ref, None)
+}
+
+pub fn plan_with_access(
+    source: &str,
+    agent: &str,
+    session_ref: &AgentSessionRef,
+    access: Option<&AgentResumeAccess>,
+) -> Option<AgentResumePlan> {
     if !is_official_agent_source(source, agent) {
         return None;
     }
@@ -189,11 +210,131 @@ pub fn plan(source: &str, agent: &str, session_ref: &AgentSessionRef) -> Option<
         _ => return None,
     };
 
+    let mut argv = argv;
+    if let Some(access_args) = access.and_then(|access| access.args_for(source, agent)) {
+        argv.extend(access_args.iter().cloned());
+    }
+
     Some(AgentResumePlan {
         agent: agent.to_string(),
         argv,
         dedupe_key: dedupe_key(source, agent, session_ref),
     })
+}
+
+impl AgentResumeAccess {
+    fn args_for(&self, source: &str, agent: &str) -> Option<&[String]> {
+        match (source, agent, self) {
+            ("herdr:codex", "codex", Self::Codex(args))
+            | ("herdr:claude", "claude", Self::Claude(args))
+            | ("herdr:copilot", "copilot", Self::Copilot(args))
+            | ("herdr:opencode", "opencode", Self::Opencode(args)) => Some(args),
+            _ => None,
+        }
+    }
+}
+
+/// Extract documented permission-related CLI arguments for supported native
+/// resume providers. Unknown arguments are omitted, so a restore cannot gain
+/// access from an arbitrary launch command.
+pub fn access_from_argv(source: &str, agent: &str, argv: &[String]) -> Option<AgentResumeAccess> {
+    let executable = match (source, agent) {
+        ("herdr:codex", "codex") => "codex",
+        ("herdr:claude", "claude") => "claude",
+        ("herdr:copilot", "copilot") => "copilot",
+        ("herdr:opencode", "opencode") => "opencode",
+        _ => return None,
+    };
+    let start = argv.iter().position(|arg| {
+        Path::new(arg)
+            .file_name()
+            .is_some_and(|name| name == executable)
+    })?;
+    let args = match executable {
+        "codex" => collect_access_args(
+            &argv[start + 1..],
+            &["--sandbox", "-s", "--ask-for-approval", "-a", "--add-dir"],
+            &[
+                "--yolo",
+                "--dangerously-bypass-approvals-and-sandbox",
+                "--dangerously-bypass-hook-trust",
+                "--search",
+            ],
+        ),
+        "claude" => collect_access_args(
+            &argv[start + 1..],
+            &[
+                "--permission-mode",
+                "--add-dir",
+                "--allowedTools",
+                "--disallowedTools",
+            ],
+            &["--dangerously-skip-permissions"],
+        ),
+        "copilot" => collect_access_args(
+            &argv[start + 1..],
+            &[
+                "--allow-tool",
+                "--deny-tool",
+                "--allow-url",
+                "--deny-url",
+                "--available-tools",
+                "--excluded-tools",
+            ],
+            &[
+                "--allow-all-tools",
+                "--allow-all-paths",
+                "--allow-all-urls",
+                "--allow-all",
+                "--yolo",
+                "--allow-all-mcp-server-instructions",
+                "--enable-all-github-mcp-tools",
+            ],
+        ),
+        "opencode" => collect_access_args(&argv[start + 1..], &[], &["--auto"]),
+        _ => Vec::new(),
+    };
+    (!args.is_empty()).then_some(match executable {
+        "codex" => AgentResumeAccess::Codex(args),
+        "claude" => AgentResumeAccess::Claude(args),
+        "copilot" => AgentResumeAccess::Copilot(args),
+        "opencode" => AgentResumeAccess::Opencode(args),
+        _ => unreachable!(),
+    })
+}
+
+fn collect_access_args(
+    argv: &[String],
+    value_flags: &[&str],
+    boolean_flags: &[&str],
+) -> Vec<String> {
+    let mut collected = Vec::new();
+    let mut index = 0;
+    while index < argv.len() {
+        let arg = &argv[index];
+        if boolean_flags.contains(&arg.as_str()) {
+            collected.push(arg.clone());
+        } else if let Some((flag, value)) = arg.split_once('=') {
+            if value_flags.contains(&flag) && valid_access_value(value) {
+                collected.push(arg.clone());
+            }
+        } else if value_flags.contains(&arg.as_str()) {
+            if let Some(value) = argv
+                .get(index + 1)
+                .filter(|value| valid_access_value(value))
+            {
+                collected.push(arg.clone());
+                collected.push(value.clone());
+                index += 1;
+            }
+        }
+        index += 1;
+    }
+    collected
+}
+
+fn valid_access_value(value: &str) -> bool {
+    !value.is_empty() && value.len() <= 4096 && !value.chars().any(char::is_control)
 }
 
 pub fn dedupe_key(source: &str, agent: &str, session_ref: &AgentSessionRef) -> String {
@@ -266,7 +407,7 @@ mod tests {
             plan(
                 "herdr:claude",
                 "claude",
-                &AgentSessionRef::id("claude-session").unwrap()
+                &AgentSessionRef::id("claude-session").unwrap(),
             )
             .unwrap()
             .argv,
@@ -276,7 +417,7 @@ mod tests {
             plan(
                 "herdr:codex",
                 "codex",
-                &AgentSessionRef::id("codex-session").unwrap()
+                &AgentSessionRef::id("codex-session").unwrap(),
             )
             .unwrap()
             .argv,
@@ -286,7 +427,7 @@ mod tests {
             plan(
                 "herdr:copilot",
                 "copilot",
-                &AgentSessionRef::id("copilot-session").unwrap()
+                &AgentSessionRef::id("copilot-session").unwrap(),
             )
             .unwrap()
             .argv,
@@ -580,6 +721,102 @@ mod tests {
 
         let devin_plan = plan("herdr:devin", "devin", &AgentSessionRef::id(id).unwrap()).unwrap();
         assert_eq!(devin_plan.argv, vec!["devin", "--resume", id]);
+    }
+
+    #[test]
+    fn access_profiles_keep_only_documented_permission_arguments() {
+        let cases = [
+            (
+                "herdr:codex",
+                "codex",
+                vec![
+                    "node",
+                    "/opt/bin/codex",
+                    "--yolo",
+                    "--sandbox",
+                    "workspace-write",
+                    "--model",
+                    "ignored",
+                ],
+                AgentResumeAccess::Codex(vec![
+                    "--yolo".into(),
+                    "--sandbox".into(),
+                    "workspace-write".into(),
+                ]),
+            ),
+            (
+                "herdr:claude",
+                "claude",
+                vec![
+                    "claude",
+                    "--dangerously-skip-permissions",
+                    "--allowedTools",
+                    "Bash(git status:*)",
+                    "--model",
+                    "ignored",
+                ],
+                AgentResumeAccess::Claude(vec![
+                    "--dangerously-skip-permissions".into(),
+                    "--allowedTools".into(),
+                    "Bash(git status:*)".into(),
+                ]),
+            ),
+            (
+                "herdr:copilot",
+                "copilot",
+                vec![
+                    "copilot",
+                    "--allow-tool=shell(git:*)",
+                    "--deny-tool",
+                    "shell(git push)",
+                    "--model",
+                    "ignored",
+                ],
+                AgentResumeAccess::Copilot(vec![
+                    "--allow-tool=shell(git:*)".into(),
+                    "--deny-tool".into(),
+                    "shell(git push)".into(),
+                ]),
+            ),
+            (
+                "herdr:opencode",
+                "opencode",
+                vec!["opencode", "--auto", "--model", "ignored"],
+                AgentResumeAccess::Opencode(vec!["--auto".into()]),
+            ),
+        ];
+
+        for (source, agent, argv, expected) in cases {
+            let argv = argv.into_iter().map(str::to_string).collect::<Vec<_>>();
+            assert_eq!(access_from_argv(source, agent, &argv), Some(expected));
+        }
+    }
+
+    #[test]
+    fn planner_appends_matching_access_profile_only() {
+        let access = AgentResumeAccess::Codex(vec!["--yolo".into()]);
+        assert_eq!(
+            plan_with_access(
+                "herdr:codex",
+                "codex",
+                &AgentSessionRef::id("codex-session").unwrap(),
+                Some(&access),
+            )
+            .unwrap()
+            .argv,
+            vec!["codex", "resume", "codex-session", "--yolo"]
+        );
+        assert_eq!(
+            plan_with_access(
+                "herdr:claude",
+                "claude",
+                &AgentSessionRef::id("claude-session").unwrap(),
+                Some(&access),
+            )
+            .unwrap()
+            .argv,
+            vec!["claude", "--resume", "claude-session"]
+        );
     }
 
     #[test]
