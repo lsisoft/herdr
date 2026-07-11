@@ -370,3 +370,16 @@ herdr pane read w1:p1 --source recent --lines 50
 ```
 
 If integration state looks wrong, first confirm the agent is running inside Herdr and that the relevant hook or plugin was installed for the same user account.
+
+## Fork runtime restoration
+
+This fork preserves allow-listed permission and runtime settings when it builds a native agent resume command. An explicit agent-reported `resume_argv` remains authoritative. No prompts, credentials, environment variables, or arbitrary provider configuration are copied into the launch profile.
+
+| Agent | Native resume profile |
+| --- | --- |
+| Codex | Model/provider, reasoning effort/summary, verbosity, service tier, and supported access switches |
+| Claude Code | Model, effort, agent profile, and supported permission switches |
+| GitHub Copilot CLI | Model, reasoning effort, context tier, custom agent, enabled reasoning summaries, and supported access switches |
+| OpenCode | Provider/model and agent profile; the observed variant is retained as metadata but is not emitted as an unsupported resume flag |
+
+Codex and Copilot metadata can be recovered from their local provider-owned session records during persistence capture. Claude and OpenCode can also report runtime metadata through their managed integrations. Missing observations stay unknown; verify the resumed agent's actual model and permissions before submitting work.

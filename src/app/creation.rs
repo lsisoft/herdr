@@ -423,6 +423,13 @@ fn terminal_agent_session_info(
                 agent: authority.agent_label.clone(),
                 kind: session_ref.kind,
                 value: session_ref.value.clone(),
+                runtime: terminal_agent_runtime_info(
+                    terminal,
+                    &authority.source,
+                    &authority.agent_label,
+                    session_ref,
+                )
+                .map(Box::new),
             });
         }
     }
@@ -435,5 +442,26 @@ fn terminal_agent_session_info(
             agent: session.agent.clone(),
             kind: session.session_ref.kind,
             value: session.session_ref.value.clone(),
+            runtime: terminal_agent_runtime_info(
+                terminal,
+                &session.source,
+                &session.agent,
+                &session.session_ref,
+            )
+            .map(Box::new),
         })
+}
+
+fn terminal_agent_runtime_info(
+    terminal: &crate::terminal::TerminalState,
+    source: &str,
+    agent: &str,
+    _session_ref: &crate::agent_resume::AgentSessionRef,
+) -> Option<crate::agent_runtime::AgentRuntimeSettings> {
+    // Snapshot projection is pane-scaled: native session I/O belongs to
+    // persistence capture, never API/client view construction.
+    terminal
+        .agent_runtime
+        .clone()
+        .and_then(|runtime| runtime.validated(source, agent))
 }

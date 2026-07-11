@@ -650,3 +650,60 @@ fn pane_read_rejects_invalid_value_with_usage_error() {
     assert!(stderr.contains("invalid value 'bogus' for '--source <SOURCE>'"));
     assert!(!stderr.contains("Error: Custom"));
 }
+
+#[test]
+fn pane_report_agent_session_sends_runtime_profile() {
+    let base = unique_test_dir();
+    fs::create_dir_all(&base).unwrap();
+    let socket_path = base.join("herdr.sock");
+    let listener = UnixListener::bind(&socket_path).unwrap();
+
+    let server = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut line = String::new();
+        let mut reader = BufReader::new(stream.try_clone().unwrap());
+        reader.read_line(&mut line).unwrap();
+        stream
+            .write_all(br#"{"id":"cli:request","result":{"type":"ok"}}"#)
+            .unwrap();
+        stream.write_all(b"\n").unwrap();
+        stream.flush().unwrap();
+        line
+    });
+
+    let run = run_cli(
+        &socket_path,
+        &[
+            "pane",
+            "report-agent-session",
+            "1-1",
+            "--source",
+            "herdr:claude",
+            "--agent",
+            "claude",
+            "--agent-session-id",
+            "claude-session",
+            "--runtime-json",
+            r#"{"model":"claude-opus-4-6","reasoning_effort":"high"}"#,
+        ],
+    );
+    assert!(
+        run.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    let line = server.join().unwrap();
+    let request: serde_json::Value = serde_json::from_str(&line).unwrap();
+    assert_eq!(request["method"], "pane.report_agent_session");
+    assert_eq!(request["params"]["agent_session_id"], "claude-session");
+    assert_eq!(
+        request["params"]["runtime"],
+        serde_json::json!({
+            "model": "claude-opus-4-6",
+            "reasoning_effort": "high"
+        })
+    );
+
+    cleanup_test_base(&base);
+}

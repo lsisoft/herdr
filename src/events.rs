@@ -110,6 +110,7 @@ pub enum AppEvent {
         message: Option<String>,
         seq: Option<u64>,
         session_ref: Option<crate::agent_resume::AgentSessionRef>,
+        runtime: Option<Box<crate::agent_runtime::AgentRuntimeSettings>>,
     },
     /// Agent session identity was reported without state authority.
     AgentSessionReported {
@@ -119,6 +120,7 @@ pub enum AppEvent {
         seq: Option<u64>,
         session_ref: Option<crate::agent_resume::AgentSessionRef>,
         session_start_source: Option<String>,
+        runtime: Option<Box<crate::agent_runtime::AgentRuntimeSettings>>,
     },
     /// A reporter supplied the command that resumes its own session.
     AgentResumeReported {

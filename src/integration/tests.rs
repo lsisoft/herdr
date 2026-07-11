@@ -973,7 +973,11 @@ fn install_claude_writes_hook_and_updates_settings() {
     assert!(settings["hooks"].get("PostToolUse").is_none());
     assert!(settings["hooks"].get("PostToolUseFailure").is_none());
     assert!(settings["hooks"].get("SubagentStop").is_none());
-    assert!(settings["hooks"].get("Stop").is_none());
+    assert_eq!(settings["hooks"]["Stop"].as_array().unwrap().len(), 1);
+    assert!(settings["hooks"]["Stop"][0]["hooks"][0]["command"]
+        .as_str()
+        .unwrap()
+        .contains(" session"));
     assert!(settings["hooks"].get("SessionEnd").is_none());
 
     std::env::remove_var("HOME");
@@ -1025,7 +1029,7 @@ fn install_claude_is_idempotent_for_hook_entries() {
     assert!(settings["hooks"].get("PostToolUse").is_none());
     assert!(settings["hooks"].get("PostToolUseFailure").is_none());
     assert!(settings["hooks"].get("SubagentStop").is_none());
-    assert!(settings["hooks"].get("Stop").is_none());
+    assert_eq!(settings["hooks"]["Stop"].as_array().unwrap().len(), 1);
     assert!(settings["hooks"].get("SessionEnd").is_none());
 
     std::env::remove_var("HOME");
@@ -1103,7 +1107,10 @@ fn install_claude_removes_deprecated_completion_hooks_and_preserves_user_hooks()
     );
     assert!(settings["hooks"].get("UserPromptSubmit").is_none());
     assert!(settings["hooks"].get("PreToolUse").is_none());
-    assert!(settings["hooks"].get("Stop").is_none());
+    assert!(settings["hooks"]["Stop"][0]["hooks"][0]["command"]
+        .as_str()
+        .unwrap()
+        .contains(" session"));
 
     std::env::remove_var("HOME");
     let _ = fs::remove_dir_all(base);
@@ -1132,7 +1139,7 @@ fn claude_v9_integration_status_is_outdated_until_reinstalled() {
 
     assert_eq!(claude.path, hook_path);
     assert_eq!(claude.installed_version, Some(9));
-    assert_eq!(claude.expected_version, 11);
+    assert_eq!(claude.expected_version, CLAUDE_INTEGRATION_VERSION);
     assert_eq!(claude.state, IntegrationStatusKind::Outdated);
 
     install_claude().unwrap();
@@ -1141,7 +1148,7 @@ fn claude_v9_integration_status_is_outdated_until_reinstalled() {
         hook_path,
         CLAUDE_INTEGRATION_VERSION,
     );
-    assert_eq!(status.installed_version, Some(11));
+    assert_eq!(status.installed_version, Some(CLAUDE_INTEGRATION_VERSION));
     assert_eq!(status.state, IntegrationStatusKind::Current);
 
     std::env::remove_var("HOME");
@@ -1171,7 +1178,7 @@ fn claude_v2_integration_status_is_outdated() {
 
     assert_eq!(claude.path, hook_path);
     assert_eq!(claude.installed_version, Some(2));
-    assert_eq!(claude.expected_version, 11);
+    assert_eq!(claude.expected_version, CLAUDE_INTEGRATION_VERSION);
     assert_eq!(claude.state, IntegrationStatusKind::Outdated);
 
     std::env::remove_var("HOME");
@@ -1345,7 +1352,10 @@ fn uninstall_claude_removes_herdr_hooks_and_preserves_others() {
             }],
             "Stop": [{
                 "matcher": "*",
-                "hooks": [{"type": "command", "command": format!("bash '{}' idle", hook_path.display()), "timeout": 10}]
+                "hooks": [
+                    {"type": "command", "command": format!("bash '{}' idle", hook_path.display()), "timeout": 10},
+                    {"type": "command", "command": format!("bash '{}' session", hook_path.display()), "timeout": 10}
+                ]
             }],
             "SessionEnd": [{
                 "matcher": "*",
@@ -3610,6 +3620,16 @@ fn bundled_integration_asset_versions_match_expected_versions() {
         (
             "opencode",
             OPENCODE_PLUGIN_ASSET,
+            OPENCODE_INTEGRATION_VERSION,
+        ),
+        (
+            "opencode tui",
+            OPENCODE_TUI_PLUGIN_ASSET,
+            OPENCODE_INTEGRATION_VERSION,
+        ),
+        (
+            "opencode v2 tui",
+            OPENCODE_V2_TUI_PLUGIN_ASSET,
             OPENCODE_INTEGRATION_VERSION,
         ),
         ("kilo", KILO_PLUGIN_ASSET, KILO_INTEGRATION_VERSION),

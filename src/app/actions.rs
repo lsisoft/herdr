@@ -1496,21 +1496,30 @@ impl AppState {
                 message,
                 seq,
                 session_ref,
+                runtime,
             } => {
                 if crate::agent_resume::is_reserved_native_state_source(&source, &agent_label) {
                     self.update_terminal_state(pane_id, |terminal| {
-                        terminal.set_agent_session_ref(source, agent_label, session_ref, seq)
+                        terminal.set_agent_session_ref_for_session_start_with_runtime(
+                            source,
+                            agent_label,
+                            session_ref,
+                            runtime.map(|runtime| *runtime),
+                            seq,
+                            None,
+                        )
                     })
                     .into_iter()
                     .collect()
                 } else {
                     self.update_terminal_state(pane_id, |terminal| {
-                        terminal.set_hook_authority_with_session_ref(
+                        terminal.set_hook_authority_with_session_ref_and_runtime(
                             source,
                             agent_label,
                             state,
                             message,
                             session_ref,
+                            runtime.map(|runtime| *runtime),
                             seq,
                         )
                     })
@@ -1547,12 +1556,14 @@ impl AppState {
                 seq,
                 session_ref,
                 session_start_source,
+                runtime,
             } => self
                 .update_terminal_state(pane_id, |terminal| {
-                    terminal.set_agent_session_ref_for_session_start(
+                    terminal.set_agent_session_ref_for_session_start_with_runtime(
                         source,
                         agent_label,
                         session_ref,
+                        runtime.map(|runtime| *runtime),
                         seq,
                         session_start_source,
                     )
@@ -1710,10 +1721,13 @@ impl AppState {
             let previous_agent_name = terminal.agent_name.clone();
             let had_completion = terminal.last_agent_completion_seq.is_some() || !previous_seen;
             let resume_revision = terminal.reported_resume_revision();
+            let previous_runtime = terminal.agent_runtime.clone();
             let mutation = update(terminal);
             terminal.reconcile_reported_resume();
             // Resume-only changes return no mutation but must still be saved.
-            if terminal.reported_resume_revision() != resume_revision {
+            if terminal.reported_resume_revision() != resume_revision
+                || previous_runtime != terminal.agent_runtime
+            {
                 self.session_dirty = true;
             }
             let mutation = mutation?;
@@ -3287,6 +3301,7 @@ mod tests {
                 message: None,
                 seq: Some(seq),
                 session_ref: None,
+                runtime: None,
             });
             if seq == 2 {
                 assert!(!app.workspaces[1].panes[&pane_id].seen);
@@ -3314,6 +3329,7 @@ mod tests {
                 seq: Some(seq),
                 session_ref: crate::agent_resume::AgentSessionRef::id(session),
                 session_start_source: Some(reason.into()),
+                runtime: None,
             });
             if seq == 1 {
                 for state in [AgentState::Working, AgentState::Idle] {
@@ -3653,6 +3669,7 @@ mod tests {
             message: None,
             seq: Some(1),
             session_ref: None,
+            runtime: None,
         });
         state.handle_app_event(AppEvent::AgentResumeReported {
             pane_id,
@@ -3721,6 +3738,7 @@ mod tests {
             message: None,
             seq: None,
             session_ref: None,
+            runtime: None,
         });
 
         assert!(state.terminals[&terminal_id].reported_resume().is_none());
@@ -3824,6 +3842,7 @@ mod tests {
             message: None,
             seq: Some(1),
             session_ref: None,
+            runtime: None,
         });
         assert!(!state.terminals[&terminal_id].self_reported_agent_active());
 
@@ -3853,6 +3872,7 @@ mod tests {
             message: None,
             seq: None,
             session_ref: None,
+            runtime: None,
         });
 
         let toast = state.toast.as_ref().unwrap();
@@ -3891,6 +3911,7 @@ mod tests {
             message: None,
             seq: Some(1),
             session_ref: None,
+            runtime: None,
         });
         state.handle_app_event(AppEvent::StateChanged {
             pane_id: bg_pane_id,
@@ -3939,6 +3960,7 @@ mod tests {
             message: None,
             seq: Some(1),
             session_ref: crate::agent_resume::AgentSessionRef::id("claude-session"),
+            runtime: None,
         });
         let terminal = state.terminals.get(&terminal_id).unwrap();
         assert_eq!(terminal.state, AgentState::Working);
@@ -4048,6 +4070,7 @@ mod tests {
             message: None,
             seq: Some(1),
             session_ref: crate::agent_resume::AgentSessionRef::id("devin-session"),
+            runtime: None,
         });
 
         let terminal = state.terminals.get(&terminal_id).unwrap();
@@ -4072,6 +4095,7 @@ mod tests {
             message: None,
             seq: Some(20),
             session_ref: crate::agent_resume::AgentSessionRef::path(first_session),
+            runtime: None,
         });
         assert_eq!(first_updates.len(), 1);
         state.session_dirty = false;
@@ -4084,6 +4108,45 @@ mod tests {
             message: None,
             seq: Some(21),
             session_ref: crate::agent_resume::AgentSessionRef::path(second_session),
+            runtime: None,
+        });
+
+        assert!(second_updates.is_empty());
+        assert!(state.session_dirty);
+    }
+
+    #[test]
+    fn runtime_only_update_marks_session_dirty_without_visible_update() {
+        let mut state = app_with_workspaces(&["active"]);
+        let pane_id = *state.workspaces[0].panes.keys().next().unwrap();
+
+        let first_updates = state.handle_app_event(AppEvent::AgentSessionReported {
+            pane_id,
+            source: "herdr:claude".into(),
+            agent_label: "claude".into(),
+            seq: Some(20),
+            session_ref: crate::agent_resume::AgentSessionRef::id("claude-session"),
+            session_start_source: Some("startup".into()),
+            runtime: Some(Box::new(crate::agent_runtime::AgentRuntimeSettings {
+                model: Some("claude-sonnet-4-6".into()),
+                ..crate::agent_runtime::AgentRuntimeSettings::default()
+            })),
+        });
+        assert!(first_updates.is_empty());
+        assert!(state.session_dirty);
+        state.session_dirty = false;
+
+        let second_updates = state.handle_app_event(AppEvent::AgentSessionReported {
+            pane_id,
+            source: "herdr:claude".into(),
+            agent_label: "claude".into(),
+            seq: Some(21),
+            session_ref: crate::agent_resume::AgentSessionRef::id("claude-session"),
+            session_start_source: None,
+            runtime: Some(Box::new(crate::agent_runtime::AgentRuntimeSettings {
+                reasoning_effort: Some("high".into()),
+                ..crate::agent_runtime::AgentRuntimeSettings::default()
+            })),
         });
 
         assert!(second_updates.is_empty());

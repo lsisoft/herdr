@@ -128,6 +128,8 @@ pub struct PaneAgentSessionSnapshot {
     pub value: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub access: Option<crate::agent_resume::AgentResumeAccess>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime: Option<crate::agent_runtime::AgentRuntimeSettings>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -367,6 +369,13 @@ fn capture_tab(
                             &authority.source,
                             &authority.agent_label,
                         ),
+                        runtime: capture_resume_runtime(
+                            terminal,
+                            runtime,
+                            &authority.source,
+                            &authority.agent_label,
+                            session_ref,
+                        ),
                     });
                 }
             }
@@ -383,6 +392,13 @@ fn capture_tab(
                         runtime,
                         &session.source,
                         &session.agent,
+                    ),
+                    runtime: capture_resume_runtime(
+                        terminal,
+                        runtime,
+                        &session.source,
+                        &session.agent,
+                        &session.session_ref,
                     ),
                 })
         });
@@ -439,6 +455,12 @@ fn capture_resume_access(
         .as_deref()
         .and_then(|argv| crate::agent_resume::access_from_argv(source, agent, argv))
         .or_else(|| {
+            terminal
+                .pending_agent_resume_plan
+                .as_ref()
+                .and_then(|plan| crate::agent_resume::access_from_argv(source, agent, &plan.argv))
+        })
+        .or_else(|| {
             runtime
                 .and_then(|runtime| runtime.child_pid())
                 .and_then(crate::detect::foreground_job)
@@ -450,6 +472,66 @@ fn capture_resume_access(
                     })
                 })
         })
+        .or_else(|| {
+            terminal
+                .agent_resume_access
+                .as_ref()
+                .and_then(|access| access.validated(source, agent))
+        })
+}
+
+fn capture_resume_runtime(
+    terminal: &crate::terminal::TerminalState,
+    runtime: Option<&crate::terminal::TerminalRuntime>,
+    source: &str,
+    agent: &str,
+    session_ref: &crate::agent_resume::AgentSessionRef,
+) -> Option<crate::agent_runtime::AgentRuntimeSettings> {
+    let mut captured = crate::agent_runtime::AgentRuntimeSettings::default();
+    let mut found = false;
+    let mut merge = |settings: Option<crate::agent_runtime::AgentRuntimeSettings>| {
+        if let Some(settings) = settings {
+            captured = std::mem::take(&mut captured).merged(settings);
+            found = true;
+        }
+    };
+
+    merge(
+        terminal
+            .launch_argv
+            .as_deref()
+            .and_then(|argv| crate::agent_runtime::from_argv(source, agent, argv)),
+    );
+    merge(
+        terminal
+            .pending_agent_resume_plan
+            .as_ref()
+            .and_then(|plan| crate::agent_runtime::from_argv(source, agent, &plan.argv)),
+    );
+    merge(
+        runtime
+            .and_then(|runtime| runtime.child_pid())
+            .and_then(|pid| {
+                crate::detect::foreground_job(pid).and_then(|job| {
+                    job.processes.into_iter().find_map(|process| {
+                        process
+                            .argv
+                            .as_deref()
+                            .and_then(|argv| crate::agent_runtime::from_argv(source, agent, argv))
+                    })
+                })
+            }),
+    );
+    merge(terminal.agent_runtime.clone());
+    merge(crate::agent_runtime::from_native_session(
+        source,
+        agent,
+        session_ref,
+    ));
+
+    found
+        .then_some(captured)
+        .and_then(|settings| settings.validated(source, agent))
 }
 
 /// Capture pane screen history separately from the structural session snapshot.
@@ -1409,6 +1491,111 @@ mod tests {
             crate::agent_resume::AgentSessionRefKind::Id
         );
         assert_eq!(agent_session.value, "opencode-session");
+    }
+
+    #[test]
+    fn capture_contract_preserves_runtime_profile() {
+        let mut state = state_with_workspaces(&["one"]);
+        let root = state.workspaces[0].tabs[0].root_pane;
+        state.ensure_test_terminals();
+        let terminal_id = state.workspaces[0].tabs[0].panes[&root]
+            .attached_terminal_id
+            .clone();
+        let terminal = state.terminals.get_mut(&terminal_id).unwrap();
+        terminal.set_persisted_agent_session(crate::agent_resume::PersistedAgentSession {
+            source: "herdr:opencode".into(),
+            agent: "opencode".into(),
+            session_ref: crate::agent_resume::AgentSessionRef::id("opencode-session").unwrap(),
+        });
+        terminal.set_persisted_agent_runtime(Some(crate::agent_runtime::AgentRuntimeSettings {
+            model: Some("anthropic/claude-opus-4-6".into()),
+            variant: Some("high".into()),
+            agent_profile: Some("build".into()),
+            ..crate::agent_runtime::AgentRuntimeSettings::default()
+        }));
+
+        let snapshot = capture_from_state(&state);
+        let runtime = snapshot.workspaces[0].tabs[0].panes[&root.raw()]
+            .agent_session
+            .as_ref()
+            .and_then(|session| session.runtime.as_ref())
+            .expect("runtime profile should be captured");
+
+        assert_eq!(runtime.model.as_deref(), Some("anthropic/claude-opus-4-6"));
+        assert_eq!(runtime.variant.as_deref(), Some("high"));
+        assert_eq!(runtime.agent_profile.as_deref(), Some("build"));
+    }
+
+    #[test]
+    fn capture_preserves_profiles_before_deferred_resume_and_while_resume_is_disabled() {
+        let mut state = state_with_workspaces(&["one"]);
+        let root = state.workspaces[0].tabs[0].root_pane;
+        state.ensure_test_terminals();
+        let terminal_id = state.workspaces[0].tabs[0].panes[&root]
+            .attached_terminal_id
+            .clone();
+        let terminal = state.terminals.get_mut(&terminal_id).unwrap();
+        terminal.set_persisted_agent_session(crate::agent_resume::PersistedAgentSession {
+            source: "herdr:opencode".into(),
+            agent: "opencode".into(),
+            session_ref: crate::agent_resume::AgentSessionRef::id("profile-session").unwrap(),
+        });
+        terminal.pending_agent_resume_plan = Some(crate::agent_resume::AgentResumePlan {
+            agent: "opencode".into(),
+            argv: [
+                "opencode",
+                "--session",
+                "profile-session",
+                "--auto",
+                "--model",
+                "openai/model-a",
+            ]
+            .into_iter()
+            .map(String::from)
+            .collect(),
+            dedupe_key: "profile-session".into(),
+        });
+        let snapshot = capture_from_state(&state);
+        let session = snapshot.workspaces[0].tabs[0].panes[&root.raw()]
+            .agent_session
+            .as_ref()
+            .unwrap();
+        assert_eq!(
+            session.access,
+            Some(crate::agent_resume::AgentResumeAccess::Opencode(vec![
+                "--auto".into()
+            ]))
+        );
+        assert_eq!(
+            session
+                .runtime
+                .as_ref()
+                .and_then(|runtime| runtime.model.as_deref()),
+            Some("openai/model-a")
+        );
+
+        let terminal = state.terminals.get_mut(&terminal_id).unwrap();
+        terminal.pending_agent_resume_plan = None;
+        terminal.set_persisted_agent_runtime(session.runtime.clone());
+        terminal.set_persisted_agent_access(session.access.clone());
+        let recaptured = capture_from_state(&state);
+        assert_eq!(
+            recaptured.workspaces[0].tabs[0].panes[&root.raw()]
+                .agent_session
+                .as_ref(),
+            Some(session)
+        );
+    }
+
+    #[test]
+    fn agent_session_snapshot_without_runtime_remains_compatible() {
+        let session: PaneAgentSessionSnapshot = serde_json::from_str(
+            r#"{"source":"herdr:codex","agent":"codex","kind":"id","value":"session-id"}"#,
+        )
+        .unwrap();
+
+        assert!(session.runtime.is_none());
+        assert!(session.access.is_none());
     }
 
     #[test]

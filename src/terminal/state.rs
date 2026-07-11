@@ -40,6 +40,7 @@ struct SuppressedFullLifecycleHookReport {
     observed_at: Instant,
     reason: FullLifecycleHookSuppressionReason,
     replacement_session_ref: Option<crate::agent_resume::AgentSessionRef>,
+    replacement_runtime: Option<crate::agent_runtime::AgentRuntimeSettings>,
     pending_replacement_report: Option<PendingFullLifecycleHookReport>,
 }
 
@@ -47,6 +48,7 @@ struct SuppressedFullLifecycleHookReport {
 struct PendingFullLifecycleHookReport {
     authority: HookAuthority,
     seq: u64,
+    runtime: Option<crate::agent_runtime::AgentRuntimeSettings>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -140,6 +142,14 @@ pub struct TerminalState {
     reported_resume: Option<crate::agent_resume::ReportedAgentResume>,
     reported_resume_revision: u64,
     pub terminal_title: Option<String>,
+    pub agent_runtime: Option<crate::agent_runtime::AgentRuntimeSettings>,
+    pub agent_resume_access: Option<crate::agent_resume::AgentResumeAccess>,
+    agent_runtime_session: Option<(
+        String,
+        String,
+        crate::agent_resume::AgentSessionRefKind,
+        String,
+    )>,
     pub manual_label: Option<String>,
     pub agent_name: Option<String>,
     agent_name_owner: Option<AgentNameOwner>,
@@ -180,6 +190,9 @@ impl TerminalState {
             reported_resume: None,
             reported_resume_revision: 0,
             terminal_title: None,
+            agent_runtime: None,
+            agent_resume_access: None,
+            agent_runtime_session: None,
             manual_label: None,
             agent_name: None,
             agent_name_owner: None,
@@ -252,6 +265,7 @@ impl TerminalState {
         self.state = snapshot.authority.state;
         self.hook_authority = Some(snapshot.authority);
         self.agent_process_acquisition_pending = snapshot.acquisition_pending;
+        self.reconcile_agent_runtime();
     }
 
     pub(crate) fn finish_agent_process_acquisition(&mut self) -> bool {
@@ -487,6 +501,7 @@ impl TerminalState {
                     }
                 }
                 suppressed.session_ref = exited_session_ref;
+                suppressed.replacement_runtime = None;
                 suppressed.pending_replacement_report = None;
                 suppressed.observed_at = now;
                 reset_sources.push(source.clone());
@@ -678,6 +693,7 @@ impl TerminalState {
         .and_then(|mutation| mutation.effective_state_change)
     }
 
+    #[cfg(test)]
     pub fn set_hook_authority_with_session_ref(
         &mut self,
         source: String,
@@ -687,17 +703,40 @@ impl TerminalState {
         session_ref: Option<crate::agent_resume::AgentSessionRef>,
         seq: Option<u64>,
     ) -> Option<TerminalStateMutation> {
-        self.set_hook_authority_at(
+        self.set_hook_authority_with_session_ref_and_runtime(
             source,
             agent_label,
             state,
             message,
             session_ref,
+            None,
+            seq,
+        )
+    }
+
+    pub fn set_hook_authority_with_session_ref_and_runtime(
+        &mut self,
+        source: String,
+        agent_label: String,
+        state: AgentState,
+        message: Option<String>,
+        session_ref: Option<crate::agent_resume::AgentSessionRef>,
+        runtime: Option<crate::agent_runtime::AgentRuntimeSettings>,
+        seq: Option<u64>,
+    ) -> Option<TerminalStateMutation> {
+        self.set_hook_authority_with_runtime_at(
+            source,
+            agent_label,
+            state,
+            message,
+            session_ref,
+            runtime,
             seq,
             Instant::now(),
         )
     }
 
+    #[cfg(test)]
     pub fn set_hook_authority_at(
         &mut self,
         source: String,
@@ -705,6 +744,29 @@ impl TerminalState {
         state: AgentState,
         message: Option<String>,
         session_ref: Option<crate::agent_resume::AgentSessionRef>,
+        seq: Option<u64>,
+        now: Instant,
+    ) -> Option<TerminalStateMutation> {
+        self.set_hook_authority_with_runtime_at(
+            source,
+            agent_label,
+            state,
+            message,
+            session_ref,
+            None,
+            seq,
+            now,
+        )
+    }
+
+    fn set_hook_authority_with_runtime_at(
+        &mut self,
+        source: String,
+        agent_label: String,
+        state: AgentState,
+        message: Option<String>,
+        session_ref: Option<crate::agent_resume::AgentSessionRef>,
+        runtime: Option<crate::agent_runtime::AgentRuntimeSettings>,
         seq: Option<u64>,
         now: Instant,
     ) -> Option<TerminalStateMutation> {
@@ -724,6 +786,7 @@ impl TerminalState {
             state,
             message.as_deref(),
             &session_ref,
+            runtime.as_ref(),
             seq,
             now,
         ) {
@@ -743,6 +806,7 @@ impl TerminalState {
         if owner_conflicts && !foreground_takeover_allowed {
             return None;
         }
+        let reported_session_ref = session_ref.clone();
         let session_ref = session_ref.map(|session_ref| {
             if self.lifecycle_hook_report_replaces_persisted_session(
                 &source,
@@ -755,6 +819,7 @@ impl TerminalState {
                     .unwrap_or(session_ref)
             }
         });
+        let runtime = runtime.filter(|_| reported_session_ref == session_ref);
         if self.live_full_lifecycle_hook_authority_conflicts_with_session(
             &source,
             &agent_label,
@@ -801,6 +866,11 @@ impl TerminalState {
             session_ref,
         });
         let current_session = self.current_session_identity_for_persistence();
+        self.update_runtime_for_session(
+            previous_session.as_ref(),
+            current_session.as_ref(),
+            runtime,
+        );
         let effective_state_change = self.recompute_effective_state(
             previous_agent_label,
             previous_known_agent,
@@ -923,6 +993,7 @@ impl TerminalState {
                 observed_at,
                 reason,
                 replacement_session_ref: None,
+                replacement_runtime: None,
                 pending_replacement_report: None,
             },
         );
@@ -935,6 +1006,7 @@ impl TerminalState {
         state: AgentState,
         message: Option<&str>,
         session_ref: &Option<crate::agent_resume::AgentSessionRef>,
+        runtime: Option<&crate::agent_runtime::AgentRuntimeSettings>,
         seq: Option<u64>,
         reported_at: Instant,
     ) -> FullLifecycleHookReportRoute {
@@ -1038,6 +1110,7 @@ impl TerminalState {
                 observed_at: reported_at,
                 reason: FullLifecycleHookSuppressionReason::ProcessExit,
                 replacement_session_ref: None,
+                replacement_runtime: None,
                 pending_replacement_report: None,
             });
         let replace_pending = suppressed
@@ -1055,6 +1128,7 @@ impl TerminalState {
                     session_ref: Some(session_ref),
                 },
                 seq,
+                runtime: runtime.cloned(),
             });
         }
         FullLifecycleHookReportRoute::Ignore
@@ -1197,6 +1271,7 @@ impl TerminalState {
                             suppressed.agent_label.clone(),
                             session_ref,
                             pending,
+                            suppressed.replacement_runtime.take(),
                         ));
                         return false;
                     }
@@ -1223,10 +1298,11 @@ impl TerminalState {
         self.hook_report_sequences.retain(|source, _| {
             validated_replacement_sessions
                 .iter()
-                .any(|(validated_source, _, _, _)| validated_source == source)
+                .any(|(validated_source, _, _, _, _)| validated_source == source)
                 || !crate::detect::full_lifecycle_hook_authority(source, detected_label)
         });
-        for (source, agent_label, session_ref, pending) in validated_replacement_sessions {
+        for (source, agent_label, session_ref, pending, runtime) in validated_replacement_sessions {
+            let previous_session = self.current_session_identity_for_persistence();
             self.forget_stale_full_lifecycle_hook_session(&source, &agent_label, &session_ref);
             self.reconcile_agent_name_owner(&agent_label, Some(&session_ref));
             self.persisted_agent_session = Some(crate::agent_resume::PersistedAgentSession {
@@ -1234,9 +1310,21 @@ impl TerminalState {
                 agent: agent_label,
                 session_ref,
             });
+            let current_session = self.current_session_identity_for_persistence();
+            self.update_runtime_for_session(
+                previous_session.as_ref(),
+                current_session.as_ref(),
+                runtime,
+            );
             if let Some(pending) = pending {
                 self.hook_report_sequences.insert(source, pending.seq);
                 self.hook_authority = Some(pending.authority);
+                let current_session = self.current_session_identity_for_persistence();
+                self.update_runtime_for_session(
+                    current_session.as_ref(),
+                    current_session.as_ref(),
+                    pending.runtime,
+                );
             }
         }
     }
@@ -1438,16 +1526,44 @@ impl TerminalState {
         session: crate::agent_resume::PersistedAgentSession,
     ) {
         self.persisted_agent_session = Some(session);
+        self.agent_runtime = None;
+        self.agent_resume_access = None;
+        self.agent_runtime_session = None;
     }
 
     pub fn set_managed_agent_launch_session(
         &mut self,
         session: crate::agent_resume::PersistedAgentSession,
     ) {
-        self.persisted_agent_session = Some(session.clone());
+        self.set_persisted_agent_session(session.clone());
         self.managed_agent_launch_session = Some(session);
     }
 
+    pub fn set_persisted_agent_runtime(
+        &mut self,
+        runtime: Option<crate::agent_runtime::AgentRuntimeSettings>,
+    ) {
+        let session = self.current_session_identity_for_persistence();
+        self.agent_runtime = session.as_ref().and_then(|(source, agent, _, _)| {
+            runtime.and_then(|runtime| runtime.validated(source, agent))
+        });
+        self.agent_runtime_session =
+            session.filter(|_| self.agent_runtime.is_some() || self.agent_resume_access.is_some());
+    }
+
+    pub fn set_persisted_agent_access(
+        &mut self,
+        access: Option<crate::agent_resume::AgentResumeAccess>,
+    ) {
+        let session = self.current_session_identity_for_persistence();
+        self.agent_resume_access = session.as_ref().and_then(|(source, agent, _, _)| {
+            access.and_then(|access| access.validated(source, agent))
+        });
+        self.agent_runtime_session =
+            session.filter(|_| self.agent_runtime.is_some() || self.agent_resume_access.is_some());
+    }
+
+    #[cfg(test)]
     pub fn set_agent_session_ref(
         &mut self,
         source: String,
@@ -1458,11 +1574,31 @@ impl TerminalState {
         self.set_agent_session_ref_for_session_start(source, agent_label, session_ref, seq, None)
     }
 
+    #[cfg(test)]
     pub fn set_agent_session_ref_for_session_start(
         &mut self,
         source: String,
         agent_label: String,
         session_ref: Option<crate::agent_resume::AgentSessionRef>,
+        seq: Option<u64>,
+        session_start_source: Option<String>,
+    ) -> Option<TerminalStateMutation> {
+        self.set_agent_session_ref_for_session_start_with_runtime(
+            source,
+            agent_label,
+            session_ref,
+            None,
+            seq,
+            session_start_source,
+        )
+    }
+
+    pub fn set_agent_session_ref_for_session_start_with_runtime(
+        &mut self,
+        source: String,
+        agent_label: String,
+        session_ref: Option<crate::agent_resume::AgentSessionRef>,
+        runtime: Option<crate::agent_runtime::AgentRuntimeSettings>,
         seq: Option<u64>,
         session_start_source: Option<String>,
     ) -> Option<TerminalStateMutation> {
@@ -1517,9 +1653,11 @@ impl TerminalState {
                     observed_at: Instant::now(),
                     reason: FullLifecycleHookSuppressionReason::ProcessExit,
                     replacement_session_ref: None,
+                    replacement_runtime: None,
                     pending_replacement_report: None,
                 });
             suppressed.replacement_session_ref = Some(session_ref);
+            suppressed.replacement_runtime = runtime;
             suppressed.pending_replacement_report = None;
             return None;
         }
@@ -1555,6 +1693,7 @@ impl TerminalState {
                     observed_at: now,
                     reason: FullLifecycleHookSuppressionReason::ProcessExit,
                     replacement_session_ref: None,
+                    replacement_runtime: None,
                     pending_replacement_report: None,
                 });
             if suppressed.replacement_session_ref.as_ref() != Some(&session_ref) {
@@ -1568,6 +1707,10 @@ impl TerminalState {
                     suppressed.pending_replacement_report = None;
                 }
                 suppressed.replacement_session_ref = Some(session_ref);
+                suppressed.replacement_runtime = None;
+            }
+            if runtime.is_some() {
+                suppressed.replacement_runtime = runtime;
             }
             self.hook_report_sequences.insert(source.clone(), seq);
 
@@ -1682,6 +1825,11 @@ impl TerminalState {
             // Rebinding can expose a cached Working screen; only a fresh report ends acquisition.
             self.agent_process_acquisition_pending = true;
         }
+        self.update_runtime_for_session(
+            previous_session.as_ref(),
+            current_session.as_ref(),
+            runtime,
+        );
         Some(TerminalStateMutation {
             effective_state_change: self.recompute_effective_state(
                 previous_agent_label,
@@ -1701,6 +1849,96 @@ impl TerminalState {
         };
         crate::detect::parse_agent_label(agent_label)
             .is_some_and(|hook_agent| hook_agent != detected_agent)
+    }
+
+    fn update_runtime_for_session(
+        &mut self,
+        previous_session: Option<&(
+            String,
+            String,
+            crate::agent_resume::AgentSessionRefKind,
+            String,
+        )>,
+        current_session: Option<&(
+            String,
+            String,
+            crate::agent_resume::AgentSessionRefKind,
+            String,
+        )>,
+        runtime: Option<crate::agent_runtime::AgentRuntimeSettings>,
+    ) {
+        let runtime = current_session.and_then(|(source, agent, _, _)| {
+            runtime.and_then(|runtime| runtime.validated(source, agent))
+        });
+        if previous_session != current_session {
+            self.agent_resume_access = None;
+        }
+        if current_session.is_none() {
+            self.agent_runtime = None;
+        } else if previous_session == current_session {
+            if let Some(runtime) = runtime {
+                let complete_report = current_session.is_some_and(|(source, agent, _, _)| {
+                    source == "herdr:opencode" && agent == "opencode"
+                });
+                self.agent_runtime = Some(if complete_report {
+                    runtime
+                } else {
+                    self.agent_runtime
+                        .take()
+                        .unwrap_or_default()
+                        .merged(runtime)
+                });
+            }
+        } else {
+            self.agent_runtime = runtime;
+        }
+        self.agent_runtime_session = current_session
+            .cloned()
+            .filter(|_| self.agent_runtime.is_some() || self.agent_resume_access.is_some());
+    }
+
+    fn reconcile_agent_runtime(&mut self) {
+        if self.agent_runtime.is_none() && self.agent_resume_access.is_none() {
+            return;
+        }
+        let current = self
+            .hook_authority
+            .as_ref()
+            .and_then(|authority| {
+                authority.session_ref.as_ref().map(|session| {
+                    (
+                        authority.source.as_str(),
+                        authority.agent_label.as_str(),
+                        session,
+                    )
+                })
+            })
+            .or_else(|| {
+                self.persisted_agent_session.as_ref().map(|session| {
+                    (
+                        session.source.as_str(),
+                        session.agent.as_str(),
+                        &session.session_ref,
+                    )
+                })
+            });
+        let matches = self
+            .agent_runtime_session
+            .as_ref()
+            .zip(current)
+            .is_some_and(
+                |((source, agent, kind, value), (current_source, current_agent, session))| {
+                    source == current_source
+                        && agent == current_agent
+                        && *kind == session.kind
+                        && value == &session.value
+                },
+            );
+        if !matches {
+            self.agent_runtime = None;
+            self.agent_resume_access = None;
+            self.agent_runtime_session = None;
+        }
     }
 
     fn foreground_agent_confirms_different_owner_takeover(
@@ -2322,6 +2560,7 @@ impl TerminalState {
         self.agent_name = None;
         self.agent_name_owner = None;
         self.managed_agent = None;
+        self.reconcile_agent_runtime();
     }
 
     pub fn clear_agent_runtime_identity_after_respawn(&mut self) {
@@ -2331,6 +2570,9 @@ impl TerminalState {
         self.fallback_observed_at = None;
         self.hook_authority = None;
         self.persisted_agent_session = None;
+        self.agent_runtime = None;
+        self.agent_runtime_session = None;
+        self.agent_resume_access = None;
         self.agent_metadata.clear();
         self.metadata_report_agents.clear();
         self.suppressed_full_lifecycle_hook_reports.clear();
@@ -2409,6 +2651,7 @@ impl TerminalState {
         previous_presentation: EffectivePresentation,
         now: Instant,
     ) -> Option<EffectiveStateChange> {
+        self.reconcile_agent_runtime();
         let state = if self.visible_blocker_overrides_hook() {
             AgentState::Blocked
         } else {
@@ -5090,6 +5333,7 @@ mod tests {
                 reason: FullLifecycleHookSuppressionReason::ProcessExit,
                 replacement_session_ref: None,
                 pending_replacement_report: None,
+                replacement_runtime: None,
             },
         );
         let selected = terminal
@@ -5371,6 +5615,184 @@ mod tests {
                 .map(|session| session.session_ref.value.as_str()),
             Some("opencode-new")
         );
+    }
+
+    #[test]
+    fn runtime_reports_merge_within_a_session_and_reset_for_a_new_session() {
+        let mut terminal = test_terminal();
+        terminal.set_detected_state(Some(Agent::Claude), AgentState::Idle);
+        terminal
+            .set_agent_session_ref_for_session_start_with_runtime(
+                "herdr:claude".into(),
+                "claude".into(),
+                crate::agent_resume::AgentSessionRef::id("claude-old"),
+                Some(crate::agent_runtime::AgentRuntimeSettings {
+                    model: Some("claude-sonnet-4-6".into()),
+                    ..crate::agent_runtime::AgentRuntimeSettings::default()
+                }),
+                Some(20),
+                Some("startup".into()),
+            )
+            .expect("initial session should be accepted");
+        terminal
+            .set_agent_session_ref_for_session_start_with_runtime(
+                "herdr:claude".into(),
+                "claude".into(),
+                crate::agent_resume::AgentSessionRef::id("claude-old"),
+                Some(crate::agent_runtime::AgentRuntimeSettings {
+                    reasoning_effort: Some("high".into()),
+                    ..crate::agent_runtime::AgentRuntimeSettings::default()
+                }),
+                Some(21),
+                None,
+            )
+            .expect("same-session update should be accepted");
+
+        assert_eq!(
+            terminal.agent_runtime,
+            Some(crate::agent_runtime::AgentRuntimeSettings {
+                model: Some("claude-sonnet-4-6".into()),
+                reasoning_effort: Some("high".into()),
+                ..crate::agent_runtime::AgentRuntimeSettings::default()
+            })
+        );
+
+        terminal
+            .set_agent_session_ref_for_session_start_with_runtime(
+                "herdr:claude".into(),
+                "claude".into(),
+                crate::agent_resume::AgentSessionRef::id("claude-new"),
+                Some(crate::agent_runtime::AgentRuntimeSettings {
+                    model: Some("claude-opus-4-6".into()),
+                    ..crate::agent_runtime::AgentRuntimeSettings::default()
+                }),
+                Some(22),
+                Some("resume".into()),
+            )
+            .expect("new session should be accepted");
+
+        assert_eq!(
+            terminal.agent_runtime,
+            Some(crate::agent_runtime::AgentRuntimeSettings {
+                model: Some("claude-opus-4-6".into()),
+                ..crate::agent_runtime::AgentRuntimeSettings::default()
+            })
+        );
+    }
+
+    #[test]
+    fn opencode_complete_runtime_report_clears_defaulted_fields() {
+        let mut terminal = test_terminal();
+        terminal.set_detected_state(Some(Agent::OpenCode), AgentState::Idle);
+        terminal
+            .set_agent_session_ref_for_session_start_with_runtime(
+                "herdr:opencode".into(),
+                "opencode".into(),
+                crate::agent_resume::AgentSessionRef::id("opencode-session"),
+                Some(crate::agent_runtime::AgentRuntimeSettings {
+                    model: Some("openai/gpt-5.4".into()),
+                    variant: Some("high".into()),
+                    agent_profile: Some("build".into()),
+                    ..crate::agent_runtime::AgentRuntimeSettings::default()
+                }),
+                Some(20),
+                Some("new".into()),
+            )
+            .expect("initial session should be accepted");
+        terminal
+            .set_agent_session_ref_for_session_start_with_runtime(
+                "herdr:opencode".into(),
+                "opencode".into(),
+                crate::agent_resume::AgentSessionRef::id("opencode-session"),
+                Some(crate::agent_runtime::AgentRuntimeSettings {
+                    model: Some("openai/gpt-5.4".into()),
+                    ..crate::agent_runtime::AgentRuntimeSettings::default()
+                }),
+                Some(21),
+                None,
+            )
+            .expect("same-session update should be accepted");
+
+        assert_eq!(
+            terminal.agent_runtime,
+            Some(crate::agent_runtime::AgentRuntimeSettings {
+                model: Some("openai/gpt-5.4".into()),
+                ..crate::agent_runtime::AgentRuntimeSettings::default()
+            })
+        );
+    }
+
+    #[test]
+    fn runtime_follows_accepted_session_when_process_detection_arrives_later() {
+        let mut terminal = test_terminal();
+        let runtime = crate::agent_runtime::AgentRuntimeSettings {
+            model: Some("openai/model-a".into()),
+            agent_profile: Some("build".into()),
+            ..crate::agent_runtime::AgentRuntimeSettings::default()
+        };
+        assert!(terminal
+            .set_agent_session_ref_for_session_start_with_runtime(
+                "herdr:opencode".into(),
+                "opencode".into(),
+                crate::agent_resume::AgentSessionRef::id("pending-session"),
+                Some(runtime.clone()),
+                Some(20),
+                Some("new".into()),
+            )
+            .is_none());
+        assert!(terminal.agent_runtime.is_none());
+        let runtime = crate::agent_runtime::AgentRuntimeSettings {
+            model: Some("openai/model-b".into()),
+            ..runtime
+        };
+        assert!(terminal
+            .set_hook_authority_with_session_ref_and_runtime(
+                "herdr:opencode".into(),
+                "opencode".into(),
+                AgentState::Working,
+                None,
+                crate::agent_resume::AgentSessionRef::id("pending-session"),
+                Some(runtime.clone()),
+                Some(21),
+            )
+            .is_none());
+        terminal.set_detected_state(Some(Agent::OpenCode), AgentState::Idle);
+        assert_eq!(terminal.agent_runtime, Some(runtime.clone()));
+
+        assert!(terminal
+            .set_agent_session_ref_for_session_start_with_runtime(
+                "herdr:opencode".into(),
+                "opencode".into(),
+                crate::agent_resume::AgentSessionRef::id("other-session"),
+                Some(crate::agent_runtime::AgentRuntimeSettings {
+                    model: Some("openai/other-model".into()),
+                    ..crate::agent_runtime::AgentRuntimeSettings::default()
+                }),
+                Some(22),
+                None,
+            )
+            .is_none());
+        assert_eq!(terminal.agent_runtime, Some(runtime));
+    }
+
+    #[test]
+    fn resume_profiles_are_cleared_with_runtime_identity() {
+        let mut terminal = test_terminal();
+        terminal.set_persisted_agent_session(crate::agent_resume::PersistedAgentSession {
+            source: "herdr:codex".into(),
+            agent: "codex".into(),
+            session_ref: crate::agent_resume::AgentSessionRef::id("profile-session").unwrap(),
+        });
+        terminal.set_persisted_agent_runtime(Some(crate::agent_runtime::AgentRuntimeSettings {
+            model: Some("model-a".into()),
+            ..crate::agent_runtime::AgentRuntimeSettings::default()
+        }));
+        terminal.set_persisted_agent_access(Some(crate::agent_resume::AgentResumeAccess::Codex(
+            vec!["--yolo".into()],
+        )));
+        terminal.clear_agent_runtime_identity_after_respawn();
+        assert!(terminal.agent_runtime.is_none());
+        assert!(terminal.agent_resume_access.is_none());
     }
 
     #[test]

@@ -17,7 +17,8 @@ pub(crate) use actions::{
 #[cfg(test)]
 pub(crate) use env::integration_env_lock;
 pub(crate) use env::{
-    apply_pane_base_env, HERDR_PANE_ID_ENV_VAR, HERDR_TAB_ID_ENV_VAR, HERDR_WORKSPACE_ID_ENV_VAR,
+    apply_pane_base_env, claude_dir, codex_dir, copilot_dir, HERDR_PANE_ID_ENV_VAR,
+    HERDR_TAB_ID_ENV_VAR, HERDR_WORKSPACE_ID_ENV_VAR,
 };
 pub(crate) use registry::{
     experimental_letta_integration_status, installed_integration_statuses,
@@ -184,7 +185,7 @@ const OPENCODE_TUI_PLUGIN_ASSET: &str = include_str!("assets/opencode/herdr-tui-
 const OPENCODE_V2_TUI_PLUGIN_DIR: &str = "herdr-opencode";
 const OPENCODE_V2_TUI_PLUGIN_SPEC: &str = "./herdr-opencode";
 const OPENCODE_V2_TUI_PLUGIN_ASSET: &str = include_str!("assets/opencode/tui.js");
-const OPENCODE_INTEGRATION_VERSION: u32 = 13;
+const OPENCODE_INTEGRATION_VERSION: u32 = 14;
 const KILO_PLUGIN_INSTALL_NAME: &str = "herdr-agent-state.js";
 const KILO_PLUGIN_ASSET: &str = include_str!("assets/kilo/herdr-agent-state.js");
 const KILO_INTEGRATION_VERSION: u32 = 4;

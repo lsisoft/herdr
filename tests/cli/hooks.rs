@@ -151,12 +151,14 @@ fn claude_hook_keeps_parent_agent_type_only_blocked() {
 fn claude_hook_reports_session_id_from_stdin() {
     let request = run_claude_hook(
         "session",
-        r#"{"hook_event_name":"SessionStart","session_id":"claude-session"}"#,
+        r#"{"hook_event_name":"SessionStart","session_id":"claude-session","model":"claude-opus-4-6","effort":{"level":"high"}}"#,
     )
     .expect("session start should report session identity");
 
     assert_eq!(request["method"], "pane.report_agent_session");
     assert_eq!(request["params"]["agent_session_id"], "claude-session");
+    assert_eq!(request["params"]["runtime"]["model"], "claude-opus-4-6");
+    assert_eq!(request["params"]["runtime"]["reasoning_effort"], "high");
     assert!(request["params"].get("state").is_none());
 }
 
@@ -179,6 +181,47 @@ fn claude_hook_ignores_cursor_compatibility_payloads() {
             "src/integration/assets/claude/herdr-agent-state.sh",
             &["session"],
             r#"{"hook_event_name":"SessionStart","session_id":"cursor-session"}"#,
+            &[("CURSOR_VERSION", cursor_version)],
+        )
+        .is_none());
+    }
+}
+
+#[test]
+fn claude_hook_reports_root_stop_without_session_start_fields() {
+    let request = run_claude_hook(
+        "session",
+        r#"{"hook_event_name":"Stop","session_id":"claude-session","agent_type":"Explore","source":"resume","model":"stale-start-model","effort":{"level":"medium"}}"#,
+    )
+    .expect("root Stop should refresh session runtime");
+
+    assert_eq!(request["method"], "pane.report_agent_session");
+    assert_eq!(request["params"]["agent_session_id"], "claude-session");
+    assert_eq!(request["params"]["runtime"]["reasoning_effort"], "medium");
+    assert!(request["params"]["runtime"].get("model").is_none());
+    assert!(request["params"].get("session_start_source").is_none());
+    assert!(request["params"].get("state").is_none());
+}
+
+#[test]
+fn claude_hook_stop_refresh_rejects_foreign_and_subagent_events() {
+    for input in [
+        r#"{"hook_event_name":"stop","session_id":"foreign"}"#,
+        r#"{"hook_event_name":"StopExtra","session_id":"foreign"}"#,
+        r#"{"hook_event_name":"UserPromptSubmit","session_id":"foreign"}"#,
+        r#"{"hook_event_name":"SubagentStop","session_id":"foreign"}"#,
+        r#"{"session_id":"foreign"}"#,
+        r#"{"hook_event_name":"Stop","session_id":"nested","agent_id":"agent-abc123"}"#,
+        r#"{"hook_event_name":"Stop","session_id":"cursor-session","cursor_version":""}"#,
+    ] {
+        assert!(run_claude_hook("session", input).is_none(), "{input}");
+    }
+
+    for cursor_version in ["2026.08.11-e8db854", ""] {
+        assert!(run_shell_hook_with_env(
+            "src/integration/assets/claude/herdr-agent-state.sh",
+            &["session"],
+            r#"{"hook_event_name":"Stop","session_id":"cursor-session"}"#,
             &[("CURSOR_VERSION", cursor_version)],
         )
         .is_none());
@@ -380,4 +423,32 @@ fn devin_hook_ignores_non_matching_session_list_entries() {
     );
 
     assert!(request.is_none());
+}
+
+#[test]
+fn claude_hook_reads_latest_model_from_transcript() {
+    let base = unique_test_dir();
+    fs::create_dir_all(&base).unwrap();
+    let transcript = base.join("claude-session.jsonl");
+    fs::write(
+        &transcript,
+        concat!(
+            "{\"type\":\"assistant\",\"message\":{\"model\":\"claude-sonnet-4-6\"}}\n",
+            "{\"type\":\"assistant\",\"message\":{\"model\":\"claude-opus-4-6\"}}\n",
+        ),
+    )
+    .unwrap();
+    let input = serde_json::json!({
+        "hook_event_name": "Stop",
+        "session_id": "claude-session",
+        "transcript_path": transcript,
+        "effort": {"level": "max"}
+    });
+
+    let request = run_claude_hook("session", &input.to_string())
+        .expect("stop hook should refresh runtime settings");
+
+    assert_eq!(request["params"]["runtime"]["model"], "claude-opus-4-6");
+    assert_eq!(request["params"]["runtime"]["reasoning_effort"], "max");
+    cleanup_test_base(&base);
 }

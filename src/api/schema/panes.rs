@@ -419,6 +419,8 @@ crate::cli::projection::cli_params! {
         /// first element must be a plain command name.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub resume_argv: Option<Vec<String>> => Field::new(None).input(binding::resume()),
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub runtime: Option<crate::agent_runtime::AgentRuntimeSettings> => Field::new(None).input(binding::runtime()),
     }
 }
 
@@ -440,6 +442,8 @@ crate::cli::projection::cli_params! {
         /// first element must be a plain command name.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub resume_argv: Option<Vec<String>> => Field::new(None).input(binding::resume()),
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub runtime: Option<crate::agent_runtime::AgentRuntimeSettings> => Field::new(None).input(binding::runtime()),
     }
 }
 

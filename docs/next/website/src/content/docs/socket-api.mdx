@@ -956,3 +956,9 @@ The numbered binary protocol remains for same-install and internal operations,
 including direct terminal attach and live handoff. Check `ping` or `herdr status`
 before using those operations across different builds. JSON API clients should
 ignore unknown fields and handle unsupported methods as normal errors.
+
+## Fork runtime restoration
+
+This fork preserves allow-listed permission and runtime settings when it builds a native agent resume command. An explicit agent-reported `resume_argv` remains authoritative. No prompts, credentials, environment variables, or arbitrary provider configuration are copied into the launch profile.
+
+Official integrations may pass `--runtime-json JSON` to `pane report-agent` or `pane report-agent-session` (the JSON API field is `runtime`). Allowed fields are provider-specific: `model`, `model_provider`, `reasoning_effort`, `reasoning_summary`, `verbosity`, `service_tier`, `context_tier`, `variant`, and `agent_profile`. Read-only `agent_session.runtime` is omitted when unknown; it reports observed settings, not proof of a newly restored running model. Older servers may ignore this fork-only field; only use it with a matching fork build, and verify readback.

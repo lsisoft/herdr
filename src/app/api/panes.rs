@@ -1574,6 +1574,10 @@ impl App {
             params.agent_session_id,
             params.agent_session_path,
         );
+        let runtime = params
+            .runtime
+            .and_then(|runtime| runtime.validated(&params.source, &agent_label))
+            .map(Box::new);
         self.handle_internal_event(crate::events::AppEvent::HookStateReported {
             pane_id,
             session_ref: session_ref.clone(),
@@ -1582,6 +1586,7 @@ impl App {
             state: detect_state_from_api(params.state),
             message: params.message,
             seq: params.seq,
+            runtime,
         });
         let applied =
             report_is_newer && self.session_report_applied(ws_idx, pane_id, session_ref.as_ref());
@@ -1619,6 +1624,10 @@ impl App {
             params.agent_session_id,
             params.agent_session_path,
         );
+        let runtime = params
+            .runtime
+            .and_then(|runtime| runtime.validated(&params.source, &agent_label))
+            .map(Box::new);
         self.handle_internal_event(crate::events::AppEvent::AgentSessionReported {
             pane_id,
             session_ref: session_ref.clone(),
@@ -1628,6 +1637,7 @@ impl App {
             session_start_source: crate::agent_resume::normalize_session_start_source(
                 params.session_start_source,
             ),
+            runtime,
         });
         let applied =
             report_is_newer && self.session_report_applied(ws_idx, pane_id, session_ref.as_ref());
@@ -4638,6 +4648,63 @@ mod tests {
 
         let success: SuccessResponse = serde_json::from_str(&response).unwrap();
         assert_eq!(success.id, "req");
+    }
+
+    #[test]
+    fn pane_report_agent_session_records_validated_runtime_profile() {
+        let (mut app, public_pane_id) = app_with_test_workspace();
+        let pane_id = app.state.workspaces[0].tabs[0].root_pane;
+        let terminal_id = app.state.workspaces[0].tabs[0].panes[&pane_id]
+            .attached_terminal_id
+            .clone();
+
+        let response = app.handle_pane_report_agent_session(
+            "req".into(),
+            PaneReportAgentSessionParams {
+                pane_id: public_pane_id.clone(),
+                source: "herdr:claude".into(),
+                agent: "claude".into(),
+                seq: Some(1),
+                agent_session_id: Some("claude-session".into()),
+                agent_session_path: None,
+                session_start_source: Some("startup".into()),
+                resume_argv: None,
+                runtime: Some(crate::agent_runtime::AgentRuntimeSettings {
+                    model: Some("claude-opus-4-6".into()),
+                    reasoning_effort: Some("high".into()),
+                    context_tier: Some("not-supported-by-claude".into()),
+                    ..crate::agent_runtime::AgentRuntimeSettings::default()
+                }),
+            },
+        );
+
+        let success: SuccessResponse = serde_json::from_str(&response).unwrap();
+        assert_eq!(success.id, "req");
+        assert_eq!(
+            app.state.terminals[&terminal_id].agent_runtime,
+            Some(crate::agent_runtime::AgentRuntimeSettings {
+                model: Some("claude-opus-4-6".into()),
+                reasoning_effort: Some("high".into()),
+                ..crate::agent_runtime::AgentRuntimeSettings::default()
+            })
+        );
+
+        let response = app.handle_pane_get(
+            "get".into(),
+            PaneTarget {
+                pane_id: public_pane_id,
+            },
+        );
+        let success: SuccessResponse = serde_json::from_str(&response).unwrap();
+        let ResponseResult::PaneInfo { pane } = success.result else {
+            panic!("expected pane info response");
+        };
+        let runtime = pane
+            .agent_session
+            .and_then(|session| session.runtime)
+            .expect("pane response should expose the runtime profile");
+        assert_eq!(runtime.model.as_deref(), Some("claude-opus-4-6"));
+        assert_eq!(runtime.reasoning_effort.as_deref(), Some("high"));
     }
 
     #[test]
