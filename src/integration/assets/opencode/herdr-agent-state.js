@@ -2,7 +2,7 @@
 // managed by herdr; reinstalling or updating the integration overwrites this file.
 // add custom hooks/plugins beside this file instead of editing it.
 // HERDR_INTEGRATION_ID=opencode
-// HERDR_INTEGRATION_VERSION=8
+// HERDR_INTEGRATION_VERSION=9
 
 import net from "node:net";
 
@@ -98,12 +98,35 @@ function reportSession(sessionID, sessionStartSource) {
   return request("pane.report_agent_session", params);
 }
 
-function reportState(state, sessionID) {
+function reportState(state, sessionID, runtime) {
   const params = { state };
   if (sessionID) {
     params.agent_session_id = sessionID;
   }
+  if (runtime && Object.keys(runtime).length > 0) {
+    params.runtime = runtime;
+  }
   return request("pane.report_agent", params);
+}
+
+function runtimeFromMessage(input, output) {
+  const selected = input?.model ?? output?.message?.model;
+  const runtime = {};
+  if (
+    typeof selected?.providerID === "string" &&
+    selected.providerID &&
+    typeof selected?.modelID === "string" &&
+    selected.modelID
+  ) {
+    runtime.model = `${selected.providerID}/${selected.modelID}`;
+  }
+  if (typeof input?.variant === "string" && input.variant) {
+    runtime.variant = input.variant;
+  }
+  if (typeof input?.agent === "string" && input.agent) {
+    runtime.agent_profile = input.agent;
+  }
+  return runtime;
 }
 
 export const HerdrAgentStatePlugin = async () => {
@@ -116,11 +139,12 @@ export const HerdrAgentStatePlugin = async () => {
   }
 
   return {
-    "chat.message": async ({ sessionID }) => {
+    "chat.message": async (input, output) => {
+      const { sessionID } = input;
       if (sessionID && childSessions.has(sessionID)) {
         return;
       }
-      await reportState("working", sessionID);
+      await reportState("working", sessionID, runtimeFromMessage(input, output));
     },
     event: async ({ event }) => {
       const type = event?.type;

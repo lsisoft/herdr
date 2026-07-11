@@ -471,7 +471,7 @@ resume_agents_on_restore = true
 
 This is enabled by default. Herdr only resumes panes that reported a native session reference through an official Herdr integration. Supported resume targets are Claude Code, Codex, Cursor Agent CLI, GitHub Copilot CLI, Droid, Kimi Code CLI, Qoder CLI, Pi, Hermes Agent, OpenCode, Kilo Code CLI, and MastraCode. Unsupported, missing, invalid, duplicated, or stale session references restore as a normal shell in the saved pane directory.
 
-Session references are stored in the local Herdr session snapshot. They are not shown in normal pane, agent, status, or event output.
+Session references and any observed allow-listed permission/model profile are stored in the local Herdr session snapshot. For Codex, Claude Code, GitHub Copilot CLI, and OpenCode, Herdr reapplies the documented provider options it can safely restore. `pane get`, `pane list`, `agent get`, and `agent list` expose the model profile under `agent_session.runtime`; no prompts, credentials, or arbitrary provider configuration are copied into the snapshot.
 
 For how native agent session restore differs from pane screen history and live handoff, see [Session state and restore](/docs/session-state/).
 

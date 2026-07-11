@@ -39,6 +39,66 @@
     },
     "event": {
       "$defs": {
+        "AgentRuntimeSettings": {
+          "description": "Effective model and compute settings that can be observed without storing\ncredentials or arbitrary provider configuration.",
+          "properties": {
+            "agent_profile": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "context_tier": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "model": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "model_provider": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "reasoning_effort": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "reasoning_summary": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "service_tier": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "variant": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "verbosity": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "type": "object"
+        },
         "AgentSessionInfo": {
           "properties": {
             "agent": {
@@ -46,6 +106,16 @@
             },
             "kind": {
               "$ref": "#/schemas/event/$defs/AgentSessionRefKind"
+            },
+            "runtime": {
+              "anyOf": [
+                {
+                  "$ref": "#/schemas/event/$defs/AgentRuntimeSettings"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "source": {
               "type": "string"
@@ -1170,6 +1240,66 @@
           ],
           "type": "object"
         },
+        "AgentRuntimeSettings": {
+          "description": "Effective model and compute settings that can be observed without storing\ncredentials or arbitrary provider configuration.",
+          "properties": {
+            "agent_profile": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "context_tier": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "model": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "model_provider": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "reasoning_effort": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "reasoning_summary": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "service_tier": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "variant": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "verbosity": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "type": "object"
+        },
         "AgentSendParams": {
           "properties": {
             "target": {
@@ -2282,6 +2412,16 @@
             "pane_id": {
               "type": "string"
             },
+            "runtime": {
+              "anyOf": [
+                {
+                  "$ref": "#/schemas/request/$defs/AgentRuntimeSettings"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "seq": {
               "format": "uint64",
               "minimum": 0,
@@ -2324,6 +2464,16 @@
             },
             "pane_id": {
               "type": "string"
+            },
+            "runtime": {
+              "anyOf": [
+                {
+                  "$ref": "#/schemas/request/$defs/AgentRuntimeSettings"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "seq": {
               "format": "uint64",
@@ -5403,6 +5553,66 @@
           ],
           "type": "object"
         },
+        "AgentRuntimeSettings": {
+          "description": "Effective model and compute settings that can be observed without storing\ncredentials or arbitrary provider configuration.",
+          "properties": {
+            "agent_profile": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "context_tier": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "model": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "model_provider": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "reasoning_effort": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "reasoning_summary": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "service_tier": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "variant": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "verbosity": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "type": "object"
+        },
         "AgentSessionInfo": {
           "properties": {
             "agent": {
@@ -5410,6 +5620,16 @@
             },
             "kind": {
               "$ref": "#/schemas/success_response/$defs/AgentSessionRefKind"
+            },
+            "runtime": {
+              "anyOf": [
+                {
+                  "$ref": "#/schemas/success_response/$defs/AgentRuntimeSettings"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "source": {
               "type": "string"

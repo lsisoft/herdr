@@ -472,6 +472,13 @@ fn terminal_agent_session_info(
                 agent: authority.agent_label.clone(),
                 kind: session_ref.kind,
                 value: session_ref.value.clone(),
+                runtime: terminal_agent_runtime_info(
+                    terminal,
+                    &authority.source,
+                    &authority.agent_label,
+                    session_ref,
+                )
+                .map(Box::new),
             });
         }
     }
@@ -484,5 +491,31 @@ fn terminal_agent_session_info(
             agent: session.agent.clone(),
             kind: session.session_ref.kind,
             value: session.session_ref.value.clone(),
+            runtime: terminal_agent_runtime_info(
+                terminal,
+                &session.source,
+                &session.agent,
+                &session.session_ref,
+            )
+            .map(Box::new),
         })
+}
+
+fn terminal_agent_runtime_info(
+    terminal: &crate::terminal::TerminalState,
+    source: &str,
+    agent: &str,
+    session_ref: &crate::agent_resume::AgentSessionRef,
+) -> Option<crate::agent_runtime::AgentRuntimeSettings> {
+    let mut runtime = terminal.agent_runtime.clone();
+    if matches!(
+        (source, agent),
+        ("herdr:codex", "codex") | ("herdr:copilot", "copilot")
+    ) {
+        if let Some(native) = crate::agent_runtime::from_native_session(source, agent, session_ref)
+        {
+            runtime = Some(runtime.unwrap_or_default().merged(native));
+        }
+    }
+    runtime.and_then(|runtime| runtime.validated(source, agent))
 }

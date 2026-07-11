@@ -660,13 +660,43 @@ fn claude_hook_keeps_parent_agent_type_only_blocked() {
 fn claude_hook_reports_session_id_from_stdin() {
     let request = run_claude_hook(
         "session",
-        r#"{"hook_event_name":"SessionStart","session_id":"claude-session"}"#,
+        r#"{"hook_event_name":"SessionStart","session_id":"claude-session","model":"claude-opus-4-6","effort":{"level":"high"}}"#,
     )
     .expect("session start should report session identity");
 
     assert_eq!(request["method"], "pane.report_agent_session");
     assert_eq!(request["params"]["agent_session_id"], "claude-session");
+    assert_eq!(request["params"]["runtime"]["model"], "claude-opus-4-6");
+    assert_eq!(request["params"]["runtime"]["reasoning_effort"], "high");
     assert!(request["params"].get("state").is_none());
+}
+
+#[test]
+fn claude_hook_reads_latest_model_from_transcript() {
+    let base = unique_test_dir();
+    fs::create_dir_all(&base).unwrap();
+    let transcript = base.join("claude-session.jsonl");
+    fs::write(
+        &transcript,
+        concat!(
+            "{\"type\":\"assistant\",\"message\":{\"model\":\"claude-sonnet-4-6\"}}\n",
+            "{\"type\":\"assistant\",\"message\":{\"model\":\"claude-opus-4-6\"}}\n",
+        ),
+    )
+    .unwrap();
+    let input = serde_json::json!({
+        "hook_event_name": "Stop",
+        "session_id": "claude-session",
+        "transcript_path": transcript,
+        "effort": {"level": "max"}
+    });
+
+    let request = run_claude_hook("session", &input.to_string())
+        .expect("stop hook should refresh runtime settings");
+
+    assert_eq!(request["params"]["runtime"]["model"], "claude-opus-4-6");
+    assert_eq!(request["params"]["runtime"]["reasoning_effort"], "max");
+    cleanup_test_base(&base);
 }
 
 #[test]
@@ -960,6 +990,63 @@ fn pane_report_metadata_sends_presentation_request() {
         "deep in the mines"
     );
     assert_eq!(request["params"]["ttl_ms"], 3_600_000);
+
+    cleanup_test_base(&base);
+}
+
+#[test]
+fn pane_report_agent_session_sends_runtime_profile() {
+    let base = unique_test_dir();
+    fs::create_dir_all(&base).unwrap();
+    let socket_path = base.join("herdr.sock");
+    let listener = UnixListener::bind(&socket_path).unwrap();
+
+    let server = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut line = String::new();
+        let mut reader = BufReader::new(stream.try_clone().unwrap());
+        reader.read_line(&mut line).unwrap();
+        stream
+            .write_all(br#"{"id":"cli:request","result":{"type":"ok"}}"#)
+            .unwrap();
+        stream.write_all(b"\n").unwrap();
+        stream.flush().unwrap();
+        line
+    });
+
+    let run = run_cli(
+        &socket_path,
+        &[
+            "pane",
+            "report-agent-session",
+            "1-1",
+            "--source",
+            "herdr:claude",
+            "--agent",
+            "claude",
+            "--agent-session-id",
+            "claude-session",
+            "--runtime-json",
+            r#"{"model":"claude-opus-4-6","reasoning_effort":"high"}"#,
+        ],
+    );
+    assert!(
+        run.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    let line = server.join().unwrap();
+    let request: serde_json::Value = serde_json::from_str(&line).unwrap();
+    assert_eq!(request["method"], "pane.report_agent_session");
+    assert_eq!(request["params"]["agent_session_id"], "claude-session");
+    assert_eq!(
+        request["params"]["runtime"],
+        serde_json::json!({
+            "model": "claude-opus-4-6",
+            "reasoning_effort": "high"
+        })
+    );
 
     cleanup_test_base(&base);
 }

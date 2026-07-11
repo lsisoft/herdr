@@ -217,10 +217,13 @@ herdr pane report-agent <pane_id> \
   [--custom-status TEXT] \
   [--seq N] \
   [--agent-session-id ID] \
-  [--agent-session-path PATH]
+  [--agent-session-path PATH] \
+  [--runtime-json JSON]
 ```
 
-`pane get`, `pane list`, `agent get`, and `agent list` include a read-only `agent_session` object when an official integration has reported a native session reference. If no native session reference is stored, the field is omitted.
+Session-only integrations can use `pane report-agent-session` with the same `--source`, `--agent`, session reference, and optional `--runtime-json JSON` fields without reporting semantic state. The runtime JSON is restricted to the provider-specific model and compute fields documented in the socket API.
+
+`pane get`, `pane list`, `agent get`, and `agent list` include a read-only `agent_session` object when an official integration has reported a native session reference. Its optional `runtime` object records Herdr's latest observed model and compute settings. If no native session reference is stored, the field is omitted.
 
 Those commands include `foreground_cwd` when Herdr can resolve the cwd of the foreground process controlling the pane. The existing `cwd` field remains the pane/workspace cwd used for labels and follow-cwd behavior.
 

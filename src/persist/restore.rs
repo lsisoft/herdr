@@ -547,6 +547,10 @@ fn restore_tab(
                 startup.duplicate_agent_session,
             ) {
                 terminal.set_persisted_agent_session(session);
+                terminal.set_persisted_agent_runtime(restored_terminal_agent_runtime(
+                    saved_agent_session,
+                    startup.duplicate_agent_session,
+                ));
             }
             panes.insert(*id, PaneState::new(terminal_id));
             terminals.push(terminal);
@@ -640,6 +644,10 @@ fn restore_tab(
                     startup.duplicate_agent_session,
                 ) {
                     terminal.set_persisted_agent_session(session);
+                    terminal.set_persisted_agent_runtime(restored_terminal_agent_runtime(
+                        saved_agent_session,
+                        startup.duplicate_agent_session,
+                    ));
                 }
                 panes.insert(*id, PaneState::new(terminal_id.clone()));
                 terminal_runtimes.insert(terminal_id, runtime);
@@ -770,11 +778,12 @@ fn restore_plan_for_snapshot(
         return None;
     }
     let persisted = persisted_agent_session_from_snapshot(session)?;
-    crate::agent_resume::plan_with_access(
+    crate::agent_resume::plan_with_profile(
         &session.source,
         &session.agent,
         &persisted.session_ref,
         session.access.as_ref(),
+        session.runtime.as_ref(),
     )
 }
 
@@ -797,6 +806,16 @@ fn restored_terminal_agent_session(
         return None;
     }
     session.and_then(persisted_agent_session_from_snapshot)
+}
+
+fn restored_terminal_agent_runtime(
+    session: Option<&PaneAgentSessionSnapshot>,
+    duplicate_agent_session: bool,
+) -> Option<crate::agent_runtime::AgentRuntimeSettings> {
+    if duplicate_agent_session {
+        return None;
+    }
+    session.and_then(|session| session.runtime.clone())
 }
 
 #[cfg(test)]
@@ -1004,6 +1023,7 @@ mod tests {
             kind: crate::agent_resume::AgentSessionRefKind::Path,
             value: pi_session_path.clone(),
             access: None,
+            runtime: None,
         };
 
         assert!(restore_plan_for_snapshot(&session, false).is_none());
@@ -1018,8 +1038,44 @@ mod tests {
             kind: crate::agent_resume::AgentSessionRefKind::Path,
             value: test_session_path("claude-session"),
             access: None,
+            runtime: None,
         };
         assert!(restore_plan_for_snapshot(&unsupported_path, true).is_none());
+    }
+
+    #[test]
+    fn restore_plan_reapplies_access_and_runtime_profile() {
+        let session = super::super::snapshot::PaneAgentSessionSnapshot {
+            source: "herdr:codex".into(),
+            agent: "codex".into(),
+            kind: crate::agent_resume::AgentSessionRefKind::Id,
+            value: "codex-session".into(),
+            access: Some(crate::agent_resume::AgentResumeAccess::Codex(vec![
+                "--yolo".into(),
+            ])),
+            runtime: Some(crate::agent_runtime::AgentRuntimeSettings {
+                model: Some("gpt-5.6-sol".into()),
+                reasoning_effort: Some("max".into()),
+                service_tier: Some("fast".into()),
+                ..crate::agent_runtime::AgentRuntimeSettings::default()
+            }),
+        };
+
+        assert_eq!(
+            restore_plan_for_snapshot(&session, true).unwrap().argv,
+            vec![
+                "codex",
+                "resume",
+                "codex-session",
+                "--yolo",
+                "--model",
+                "gpt-5.6-sol",
+                "--config",
+                "model_reasoning_effort=\"max\"",
+                "--config",
+                "service_tier=\"fast\"",
+            ]
+        );
     }
 
     #[test]
@@ -1031,6 +1087,7 @@ mod tests {
             kind: crate::agent_resume::AgentSessionRefKind::Path,
             value: pi_session_path.clone(),
             access: None,
+            runtime: None,
         };
         let mut resumed = HashSet::new();
 
@@ -1054,6 +1111,7 @@ mod tests {
             kind: crate::agent_resume::AgentSessionRefKind::Path,
             value: test_session_path("pi-session.jsonl"),
             access: None,
+            runtime: None,
         };
         let history = super::super::snapshot::PaneHistorySnapshot {
             ansi: "RESTORED_HISTORY\r\n".into(),
@@ -1080,6 +1138,7 @@ mod tests {
             kind: crate::agent_resume::AgentSessionRefKind::Path,
             value: test_session_path("pi-session.jsonl"),
             access: None,
+            runtime: None,
         };
         let history = super::super::snapshot::PaneHistorySnapshot {
             ansi: "RESTORED_HISTORY\r\n".into(),
@@ -1109,6 +1168,7 @@ mod tests {
             kind: crate::agent_resume::AgentSessionRefKind::Path,
             value: test_session_path("pi-session.jsonl"),
             access: None,
+            runtime: None,
         };
         let history = super::super::snapshot::PaneHistorySnapshot {
             ansi: "RESTORED_HISTORY\r\n".into(),
@@ -1136,6 +1196,7 @@ mod tests {
             kind: crate::agent_resume::AgentSessionRefKind::Id,
             value: "hermes-session".into(),
             access: None,
+            runtime: None,
         };
 
         let preserved = restored_terminal_agent_session(Some(&session), false)
@@ -1153,6 +1214,7 @@ mod tests {
             kind: crate::agent_resume::AgentSessionRefKind::Path,
             value: test_session_path("pi-session.jsonl"),
             access: None,
+            runtime: None,
         };
         let mut resumed = HashSet::new();
         assert!(take_restore_plan_for_snapshot(&session, true, &mut resumed).is_some());
@@ -1190,6 +1252,7 @@ mod tests {
                                 kind: crate::agent_resume::AgentSessionRefKind::Id,
                                 value: "opencode-session".into(),
                                 access: None,
+                                runtime: None,
                             }),
                             launch_argv: None,
                         },
@@ -1345,6 +1408,7 @@ mod tests {
                 kind: crate::agent_resume::AgentSessionRefKind::Id,
                 value: "codex-session".into(),
                 access: None,
+                runtime: None,
             }),
             launch_argv: None,
         };
@@ -1497,6 +1561,7 @@ mod tests {
                                 kind: crate::agent_resume::AgentSessionRefKind::Id,
                                 value: "codex-session".into(),
                                 access: None,
+                                runtime: None,
                             }),
                             launch_argv: None,
                         },

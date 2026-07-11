@@ -562,10 +562,16 @@ Session-only official integrations report native session references with `pane.r
     "pane_id": "w1:p1",
     "source": "herdr:codex",
     "agent": "codex",
-    "agent_session_id": "..."
+    "agent_session_id": "...",
+    "runtime": {
+      "model": "gpt-5.4",
+      "reasoning_effort": "high"
+    }
   }
 }
 ```
+
+Current official integrations may include an allow-listed `runtime` object in either report method. Supported fields are `model`, `model_provider`, `reasoning_effort`, `reasoning_summary`, `verbosity`, `service_tier`, `context_tier`, `variant`, and `agent_profile`. Herdr validates fields against the matching official `source` and `agent`; arbitrary command arguments and provider configuration are not accepted.
 
 `pane.get`, `pane.list`, `agent.get`, and `agent.list` expose a read-only `agent_session` object when Herdr has a stored native session reference:
 
@@ -575,12 +581,16 @@ Session-only official integrations report native session references with `pane.r
     "source": "herdr:codex",
     "agent": "codex",
     "kind": "id",
-    "value": "..."
+    "value": "...",
+    "runtime": {
+      "model": "gpt-5.4",
+      "reasoning_effort": "high"
+    }
   }
 }
 ```
 
-If no native session reference is stored, the field is omitted.
+If no native session reference is stored, `agent_session` is omitted. If Herdr has not observed a runtime profile for that session, `runtime` is omitted. Codex and GitHub Copilot CLI runtime responses are also refreshed from their provider-owned session event logs; Claude Code and OpenCode refresh through their managed integrations.
 
 `pane.get`, `pane.list`, `agent.get`, and `agent.list` also expose `foreground_cwd` when Herdr can resolve the cwd of the process currently controlling the pane PTY. The existing `cwd` field remains the pane/workspace cwd used for labels, follow-cwd behavior, and restored session state.
 

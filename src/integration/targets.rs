@@ -145,11 +145,19 @@ pub(crate) fn install_claude() -> io::Result<ClaudeInstallPaths> {
     remove_hook_commands(hooks, "UserPromptSubmit", &hook_path, Some("working"))?;
     remove_hook_commands(hooks, "PreToolUse", &hook_path, Some("working"))?;
     remove_hook_commands(hooks, "Stop", &hook_path, Some("idle"))?;
+    remove_hook_commands(hooks, "Stop", &hook_path, Some("session"))?;
     remove_hook_commands(hooks, "SessionEnd", &hook_path, Some("release"))?;
     remove_hook_commands(hooks, "SessionStart", &hook_path, Some("session"))?;
     ensure_command_hook(
         hooks,
         "SessionStart",
+        hook_command(&hook_path, Some("session")),
+        10,
+        Some("*"),
+    )?;
+    ensure_command_hook(
+        hooks,
+        "Stop",
         hook_command(&hook_path, Some("session")),
         10,
         Some("*"),
@@ -591,6 +599,7 @@ pub(crate) fn uninstall_claude() -> io::Result<ClaudeUninstallResult> {
             updated_settings |=
                 remove_hook_commands(hooks, "SubagentStop", &hook_path, Some("working"))?;
             updated_settings |= remove_hook_commands(hooks, "Stop", &hook_path, Some("idle"))?;
+            updated_settings |= remove_hook_commands(hooks, "Stop", &hook_path, Some("session"))?;
             updated_settings |=
                 remove_hook_commands(hooks, "SessionEnd", &hook_path, Some("release"))?;
         }

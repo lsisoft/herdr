@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### Added
+- Native session restore now preserves allow-listed permission flags and effective model/compute profiles for Codex, Claude Code, GitHub Copilot CLI, and OpenCode. Herdr captures provider-supported settings from launch arguments, official session event logs, and managed integrations, exposes them under `agent_session.runtime`, and reapplies documented resume options after a full server restart.
+
 ## [0.7.3] - 2026-07-08
 
 ### Fixed

@@ -134,6 +134,16 @@ pub fn plan_with_access(
     session_ref: &AgentSessionRef,
     access: Option<&AgentResumeAccess>,
 ) -> Option<AgentResumePlan> {
+    plan_with_profile(source, agent, session_ref, access, None)
+}
+
+pub fn plan_with_profile(
+    source: &str,
+    agent: &str,
+    session_ref: &AgentSessionRef,
+    access: Option<&AgentResumeAccess>,
+    runtime: Option<&crate::agent_runtime::AgentRuntimeSettings>,
+) -> Option<AgentResumePlan> {
     if !is_official_agent_source(source, agent) {
         return None;
     }
@@ -212,7 +222,10 @@ pub fn plan_with_access(
 
     let mut argv = argv;
     if let Some(access_args) = access.and_then(|access| access.args_for(source, agent)) {
-        argv.extend(access_args.iter().cloned());
+        argv.extend(access_args);
+    }
+    if let Some(runtime) = runtime {
+        argv.extend(runtime.resume_args(source, agent));
     }
 
     Some(AgentResumePlan {
@@ -223,13 +236,21 @@ pub fn plan_with_access(
 }
 
 impl AgentResumeAccess {
-    fn args_for(&self, source: &str, agent: &str) -> Option<&[String]> {
-        match (source, agent, self) {
-            ("herdr:codex", "codex", Self::Codex(args))
-            | ("herdr:claude", "claude", Self::Claude(args))
-            | ("herdr:copilot", "copilot", Self::Copilot(args))
-            | ("herdr:opencode", "opencode", Self::Opencode(args)) => Some(args),
-            _ => None,
+    fn args_for(&self, source: &str, agent: &str) -> Option<Vec<String>> {
+        let (executable, args) = match (source, agent, self) {
+            ("herdr:codex", "codex", Self::Codex(args)) => ("codex", args),
+            ("herdr:claude", "claude", Self::Claude(args)) => ("claude", args),
+            ("herdr:copilot", "copilot", Self::Copilot(args)) => ("copilot", args),
+            ("herdr:opencode", "opencode", Self::Opencode(args)) => ("opencode", args),
+            _ => return None,
+        };
+        let mut argv = Vec::with_capacity(args.len() + 1);
+        argv.push(executable.to_string());
+        argv.extend(args.iter().cloned());
+        match access_from_argv(source, agent, &argv)? {
+            Self::Codex(args) | Self::Claude(args) | Self::Copilot(args) | Self::Opencode(args) => {
+                Some(args)
+            }
         }
     }
 }
@@ -245,15 +266,12 @@ pub fn access_from_argv(source: &str, agent: &str, argv: &[String]) -> Option<Ag
         ("herdr:opencode", "opencode") => "opencode",
         _ => return None,
     };
-    let start = argv.iter().position(|arg| {
-        Path::new(arg)
-            .file_name()
-            .is_some_and(|name| name == executable)
-    })?;
+    let start = agent_executable_position(argv, executable)?;
     let args = match executable {
         "codex" => collect_access_args(
             &argv[start + 1..],
             &["--sandbox", "-s", "--ask-for-approval", "-a", "--add-dir"],
+            &[],
             &[
                 "--yolo",
                 "--dangerously-bypass-approvals-and-sandbox",
@@ -263,24 +281,32 @@ pub fn access_from_argv(source: &str, agent: &str, argv: &[String]) -> Option<Ag
         ),
         "claude" => collect_access_args(
             &argv[start + 1..],
+            &["--permission-mode", "--permission-prompt-tool", "--tools"],
             &[
-                "--permission-mode",
                 "--add-dir",
                 "--allowedTools",
+                "--allowed-tools",
                 "--disallowedTools",
+                "--disallowed-tools",
             ],
-            &["--dangerously-skip-permissions"],
+            &[
+                "--dangerously-skip-permissions",
+                "--allow-dangerously-skip-permissions",
+            ],
         ),
         "copilot" => collect_access_args(
             &argv[start + 1..],
             &[
+                "--add-dir",
                 "--allow-tool",
                 "--deny-tool",
                 "--allow-url",
                 "--deny-url",
                 "--available-tools",
                 "--excluded-tools",
+                "--disable-mcp-server",
             ],
+            &[],
             &[
                 "--allow-all-tools",
                 "--allow-all-paths",
@@ -289,9 +315,12 @@ pub fn access_from_argv(source: &str, agent: &str, argv: &[String]) -> Option<Ag
                 "--yolo",
                 "--allow-all-mcp-server-instructions",
                 "--enable-all-github-mcp-tools",
+                "--disallow-temp-dir",
+                "--disable-builtin-mcps",
+                "--no-ask-user",
             ],
         ),
-        "opencode" => collect_access_args(&argv[start + 1..], &[], &["--auto"]),
+        "opencode" => collect_access_args(&argv[start + 1..], &[], &[], &["--auto"]),
         _ => Vec::new(),
     };
     (!args.is_empty()).then_some(match executable {
@@ -303,20 +332,53 @@ pub fn access_from_argv(source: &str, agent: &str, argv: &[String]) -> Option<Ag
     })
 }
 
+pub(crate) fn agent_executable_position(argv: &[String], executable: &str) -> Option<usize> {
+    argv.iter().position(|arg| {
+        let name = arg.rsplit(['/', '\\']).next().unwrap_or(arg);
+        if name == executable {
+            return true;
+        }
+        ["exe", "cmd", "bat"]
+            .into_iter()
+            .any(|extension| name.eq_ignore_ascii_case(&format!("{executable}.{extension}")))
+    })
+}
+
 fn collect_access_args(
     argv: &[String],
     value_flags: &[&str],
+    variadic_value_flags: &[&str],
     boolean_flags: &[&str],
 ) -> Vec<String> {
     let mut collected = Vec::new();
     let mut index = 0;
     while index < argv.len() {
         let arg = &argv[index];
+        if arg == "--" {
+            break;
+        }
         if boolean_flags.contains(&arg.as_str()) {
             collected.push(arg.clone());
         } else if let Some((flag, value)) = arg.split_once('=') {
-            if value_flags.contains(&flag) && valid_access_value(value) {
+            if (value_flags.contains(&flag) || variadic_value_flags.contains(&flag))
+                && valid_access_value(value)
+            {
                 collected.push(arg.clone());
+            }
+        } else if variadic_value_flags.contains(&arg.as_str()) {
+            let values_start = index + 1;
+            let mut next = values_start;
+            while next < argv.len()
+                && argv[next] != "--"
+                && !argv[next].starts_with('-')
+                && valid_access_value(&argv[next])
+            {
+                next += 1;
+            }
+            if next > values_start {
+                collected.push(arg.clone());
+                collected.extend(argv[values_start..next].iter().cloned());
+                index = next - 1;
             }
         } else if value_flags.contains(&arg.as_str()) {
             if let Some(value) = argv
@@ -334,7 +396,10 @@ fn collect_access_args(
 }
 
 fn valid_access_value(value: &str) -> bool {
-    !value.is_empty() && value.len() <= 4096 && !value.chars().any(char::is_control)
+    !value.is_empty()
+        && value.len() <= 4096
+        && !value.starts_with('-')
+        && !value.chars().any(char::is_control)
 }
 
 pub fn dedupe_key(source: &str, agent: &str, session_ref: &AgentSessionRef) -> String {
@@ -365,7 +430,10 @@ fn is_official_agent_source(source: &str, agent: &str) -> bool {
 }
 
 fn valid_session_id(value: &str) -> bool {
-    !value.is_empty() && value.len() <= MAX_SESSION_ID_LEN && !value.chars().any(char::is_control)
+    !value.is_empty()
+        && value.len() <= MAX_SESSION_ID_LEN
+        && !value.starts_with('-')
+        && !value.chars().any(char::is_control)
 }
 
 fn valid_session_path(value: &str) -> bool {
@@ -750,15 +818,23 @@ mod tests {
                 vec![
                     "claude",
                     "--dangerously-skip-permissions",
-                    "--allowedTools",
+                    "--allow-dangerously-skip-permissions",
+                    "--allowed-tools",
                     "Bash(git status:*)",
+                    "Read",
+                    "--tools",
+                    "Bash,Read,Edit",
                     "--model",
                     "ignored",
                 ],
                 AgentResumeAccess::Claude(vec![
                     "--dangerously-skip-permissions".into(),
-                    "--allowedTools".into(),
+                    "--allow-dangerously-skip-permissions".into(),
+                    "--allowed-tools".into(),
                     "Bash(git status:*)".into(),
+                    "Read".into(),
+                    "--tools".into(),
+                    "Bash,Read,Edit".into(),
                 ]),
             ),
             (
@@ -769,6 +845,9 @@ mod tests {
                     "--allow-tool=shell(git:*)",
                     "--deny-tool",
                     "shell(git push)",
+                    "--add-dir=../shared",
+                    "--no-ask-user",
+                    "--disallow-temp-dir",
                     "--model",
                     "ignored",
                 ],
@@ -776,6 +855,9 @@ mod tests {
                     "--allow-tool=shell(git:*)".into(),
                     "--deny-tool".into(),
                     "shell(git push)".into(),
+                    "--add-dir=../shared".into(),
+                    "--no-ask-user".into(),
+                    "--disallow-temp-dir".into(),
                 ]),
             ),
             (
@@ -816,6 +898,68 @@ mod tests {
             .unwrap()
             .argv,
             vec!["claude", "--resume", "claude-session"]
+        );
+    }
+
+    #[test]
+    fn planner_revalidates_persisted_access_arguments() {
+        let tampered =
+            AgentResumeAccess::Codex(vec!["--sandbox".into(), "--model".into(), "ignored".into()]);
+
+        assert_eq!(
+            plan_with_access(
+                "herdr:codex",
+                "codex",
+                &AgentSessionRef::id("codex-session").unwrap(),
+                Some(&tampered),
+            )
+            .unwrap()
+            .argv,
+            vec!["codex", "resume", "codex-session"]
+        );
+        assert!(AgentSessionRef::id("--dangerously-skip-permissions").is_none());
+    }
+
+    #[test]
+    fn planner_appends_runtime_after_access_profile() {
+        let access = AgentResumeAccess::Codex(vec!["--yolo".into()]);
+        let runtime = crate::agent_runtime::AgentRuntimeSettings {
+            model: Some("gpt-5.6-sol".into()),
+            reasoning_effort: Some("max".into()),
+            ..crate::agent_runtime::AgentRuntimeSettings::default()
+        };
+        assert_eq!(
+            plan_with_profile(
+                "herdr:codex",
+                "codex",
+                &AgentSessionRef::id("codex-session").unwrap(),
+                Some(&access),
+                Some(&runtime),
+            )
+            .unwrap()
+            .argv,
+            vec![
+                "codex",
+                "resume",
+                "codex-session",
+                "--yolo",
+                "--model",
+                "gpt-5.6-sol",
+                "--config",
+                "model_reasoning_effort=\"max\"",
+            ]
+        );
+    }
+
+    #[test]
+    fn access_capture_recognizes_windows_launchers() {
+        assert_eq!(
+            access_from_argv(
+                "herdr:codex",
+                "codex",
+                &["C:\\tools\\codex.exe".into(), "--yolo".into()],
+            ),
+            Some(AgentResumeAccess::Codex(vec!["--yolo".into()]))
         );
     }
 

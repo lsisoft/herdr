@@ -3,7 +3,7 @@
 # managed by herdr; reinstalling or updating the integration overwrites this file.
 # add custom hooks beside this file instead of editing it.
 # HERDR_INTEGRATION_ID=claude
-# HERDR_INTEGRATION_VERSION=7
+# HERDR_INTEGRATION_VERSION=8
 
 set -eu
 
@@ -63,6 +63,35 @@ session_id = hook_input.get("session_id")
 agent_session_id = session_id if isinstance(session_id, str) and session_id else None
 transcript_path = hook_input.get("transcript_path")
 agent_session_path = transcript_path if isinstance(transcript_path, str) and transcript_path else None
+runtime = {}
+model = hook_input.get("model") if hook_event_name == "SessionStart" else None
+if not isinstance(model, str) or not model:
+    model = None
+if model is None and agent_session_path:
+    try:
+        with open(agent_session_path, "rb") as transcript:
+            transcript.seek(0, os.SEEK_END)
+            start = max(0, transcript.tell() - 4 * 1024 * 1024)
+            transcript.seek(start)
+            if start:
+                transcript.readline()
+            for raw_line in transcript:
+                if b'"assistant"' not in raw_line or b'"model"' not in raw_line:
+                    continue
+                item = json.loads(raw_line)
+                if item.get("type") != "assistant":
+                    continue
+                candidate = (item.get("message") or {}).get("model")
+                if isinstance(candidate, str) and candidate:
+                    model = candidate
+    except Exception:
+        pass
+if model:
+    runtime["model"] = model
+effort = hook_input.get("effort")
+effort_level = effort.get("level") if isinstance(effort, dict) else None
+if isinstance(effort_level, str) and effort_level:
+    runtime["reasoning_effort"] = effort_level
 session_start_source = hook_input.get("source") if hook_event_name == "SessionStart" else None
 if not isinstance(session_start_source, str) or not session_start_source:
     session_start_source = None
@@ -78,6 +107,8 @@ if agent_session_id:
         params["agent_session_path"] = agent_session_path
     if session_start_source:
         params["session_start_source"] = session_start_source
+    if runtime:
+        params["runtime"] = runtime
     request = {
         "id": request_id,
         "method": "pane.report_agent_session",
