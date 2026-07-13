@@ -2991,8 +2991,13 @@ navigate_pane_down = "ctrl+j"
         app.reap_finished_custom_commands();
         let reaped_by_runtime = !crate::platform::process_exists(pid);
         if !reaped_by_runtime {
-            unsafe {
-                libc::waitpid(pid as libc::pid_t, std::ptr::null_mut(), libc::WNOHANG);
+            if let Some(child) = app
+                .detached_custom_command_children
+                .iter_mut()
+                .find(|child| child.id() == pid)
+            {
+                let _ = child.kill();
+                let _ = child.wait();
             }
         }
         assert!(
