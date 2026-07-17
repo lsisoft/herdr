@@ -3,7 +3,9 @@
 ## Unreleased
 
 ### Added
+- Added `ui.tab_agent_status_indicator` and a Settings > tabs control to show aggregate agent state on top tab labels with dot or icon indicators. (#1429)
 - Added `ui.sidebar_start_collapsed` to launch Herdr with the sidebar collapsed. (#1463)
+- Added Settings > experiments controls for top tab agent status, sidebar start-collapsed, and collapsed-sidebar mode. (#1429, #1463, #842)
 - Added macOS support for the `HERDR_AGENT=<agent>` foreground-process hint, allowing agents hidden behind host-visible wrappers such as `nono` to use the named agent's screen manifest. (#679)
 
 ### Fixed

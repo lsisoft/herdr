@@ -659,6 +659,17 @@
           "description": "Show agent labels in split pane borders when no manual pane label is set."
         },
         {
+          "key": "ui.tab_agent_status_indicator",
+          "type": "enum",
+          "default": "\"off\"",
+          "description": "Show aggregate agent state in top tab labels.",
+          "values": [
+            "off",
+            "dots",
+            "icons"
+          ]
+        },
+        {
           "key": "ui.hide_tab_bar_when_single_tab",
           "type": "boolean",
           "default": "false",

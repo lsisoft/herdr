@@ -1,4 +1,7 @@
-use crate::config::{Keybinds, NewTerminalCwdConfig, SoundConfig, ToastConfig, ToastDelivery};
+use crate::config::{
+    Keybinds, NewTerminalCwdConfig, SoundConfig, TabAgentStatusIndicatorConfig, ToastConfig,
+    ToastDelivery,
+};
 use crossterm::event::{KeyCode, KeyModifiers};
 use ratatui::layout::{Direction, Rect};
 use ratatui::style::Color;
@@ -945,6 +948,7 @@ pub enum SettingsSection {
     Sound,
     Toast,
     PaneLabels,
+    TabStatus,
     Experiments,
     Integrations,
 }
@@ -955,6 +959,7 @@ impl SettingsSection {
         Self::Sound,
         Self::Toast,
         Self::PaneLabels,
+        Self::TabStatus,
         Self::Integrations,
         Self::Experiments,
     ];
@@ -965,6 +970,7 @@ impl SettingsSection {
             Self::Sound => "sound",
             Self::Toast => "toasts",
             Self::PaneLabels => "pane labels",
+            Self::TabStatus => "tabs",
             Self::Experiments => "experiments",
             Self::Integrations => "integrations",
         }
@@ -978,8 +984,6 @@ pub(crate) enum ExperimentSetting {
 }
 
 impl ExperimentSetting {
-    pub(crate) const ALL: [Self; 2] = [Self::PaneHistory, Self::SwitchAsciiInputSourceInPrefix];
-
     pub(crate) fn label(self) -> &'static str {
         match self {
             Self::PaneHistory => "pane screen history",
@@ -997,6 +1001,25 @@ impl ExperimentSetting {
             }
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ExperimentSettingsRow {
+    PaneHistory,
+    SwitchAsciiInputSourceInPrefix,
+    TabAgentStatusIndicator,
+    SidebarStartCollapsed,
+    SidebarCollapsedMode,
+}
+
+impl ExperimentSettingsRow {
+    pub(crate) const ALL: [Self; 5] = [
+        Self::PaneHistory,
+        Self::SwitchAsciiInputSourceInPrefix,
+        Self::TabAgentStatusIndicator,
+        Self::SidebarStartCollapsed,
+        Self::SidebarCollapsedMode,
+    ];
 }
 
 /// All built-in theme names in display order.
@@ -1443,6 +1466,7 @@ pub struct AppState {
     pub mobile_width_threshold: u16,
     pub sidebar_width_source: SidebarWidthSource,
     pub sidebar_width_auto: bool,
+    pub sidebar_start_collapsed: bool,
     pub sidebar_collapsed: bool,
     pub sidebar_collapsed_mode: crate::config::SidebarCollapsedModeConfig,
     /// Ratio of sidebar height allocated to the workspaces section.
@@ -1464,6 +1488,7 @@ pub struct AppState {
     pub pane_borders: bool,
     pub pane_gaps: bool,
     pub show_agent_labels_on_pane_borders: bool,
+    pub tab_agent_status_indicator: TabAgentStatusIndicatorConfig,
     pub hide_tab_bar_when_single_tab: bool,
     pub pane_history_persistence: bool,
     /// Expose the focused pane's cursor anchor to the outer terminal even when
@@ -1561,6 +1586,18 @@ impl AppState {
 
     pub fn agent_border_labels_enabled(&self) -> bool {
         self.show_agent_labels_on_pane_borders
+    }
+
+    pub fn tab_agent_status_indicator(&self) -> TabAgentStatusIndicatorConfig {
+        self.tab_agent_status_indicator
+    }
+
+    pub fn sidebar_start_collapsed_enabled(&self) -> bool {
+        self.sidebar_start_collapsed
+    }
+
+    pub fn sidebar_collapsed_mode(&self) -> crate::config::SidebarCollapsedModeConfig {
+        self.sidebar_collapsed_mode
     }
 
     pub fn pane_history_persistence_enabled(&self) -> bool {
@@ -1819,6 +1856,7 @@ impl AppState {
             mobile_width_threshold: crate::config::DEFAULT_MOBILE_WIDTH_THRESHOLD,
             sidebar_width_source: SidebarWidthSource::ConfigDefault,
             sidebar_width_auto: false,
+            sidebar_start_collapsed: false,
             sidebar_collapsed: false,
             sidebar_collapsed_mode: crate::config::SidebarCollapsedModeConfig::Compact,
             sidebar_section_split: 0.5,
@@ -1837,6 +1875,7 @@ impl AppState {
             pane_borders: true,
             pane_gaps: false,
             show_agent_labels_on_pane_borders: false,
+            tab_agent_status_indicator: TabAgentStatusIndicatorConfig::Off,
             hide_tab_bar_when_single_tab: false,
             pane_history_persistence: false,
             reveal_hidden_cursor_for_cjk_ime: false,

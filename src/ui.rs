@@ -198,7 +198,9 @@ fn desktop_tab_bar_and_terminal_area(
     ws: &crate::workspace::Workspace,
     main_area: Rect,
 ) -> (Rect, Rect) {
-    let hide_single_tab_bar = app.hide_tab_bar_when_single_tab && ws.tabs.len() == 1;
+    let hide_single_tab_bar = app.hide_tab_bar_when_single_tab
+        && ws.tabs.len() == 1
+        && !app.tab_agent_status_indicator.enabled();
     if !hide_single_tab_bar && main_area.height > 1 {
         let [tab_bar_rect, terminal_area] =
             Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).areas(main_area);
@@ -267,6 +269,7 @@ fn compute_view_internal(
                 app.tab_scroll,
                 app.tab_scroll_follow_active,
                 app.mouse_capture,
+                app.tab_agent_status_indicator,
             )
         })
         .unwrap_or_default();
@@ -785,6 +788,14 @@ mod tests {
         assert!(app.view.tab_hit_areas.is_empty());
         assert_eq!(app.view.new_tab_hit_area, Rect::default());
 
+        app.tab_agent_status_indicator = crate::config::TabAgentStatusIndicatorConfig::Dots;
+        compute_view(&mut app, Rect::new(0, 0, 80, 20));
+        assert_eq!(app.view.tab_bar_rect, Rect::new(26, 0, 54, 1));
+        assert_eq!(app.view.terminal_area, Rect::new(26, 1, 54, 19));
+        assert_eq!(app.view.tab_hit_areas.len(), 1);
+        assert!(app.view.tab_hit_areas[0].width > 0);
+
+        app.tab_agent_status_indicator = crate::config::TabAgentStatusIndicatorConfig::Off;
         app.workspaces[0].test_add_tab(Some("logs"));
         compute_view(&mut app, Rect::new(0, 0, 80, 20));
 

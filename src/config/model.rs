@@ -123,6 +123,38 @@ pub enum SidebarCollapsedModeConfig {
     Hidden,
 }
 
+impl SidebarCollapsedModeConfig {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Compact => "compact",
+            Self::Hidden => "hidden",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TabAgentStatusIndicatorConfig {
+    #[default]
+    Off,
+    Dots,
+    Icons,
+}
+
+impl TabAgentStatusIndicatorConfig {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Dots => "dots",
+            Self::Icons => "icons",
+        }
+    }
+
+    pub fn enabled(self) -> bool {
+        !matches!(self, Self::Off)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct RightClickPassthroughModifierConfig(Option<KeyModifiers>);
 
@@ -808,6 +840,8 @@ pub struct UiConfig {
     pub pane_gaps: bool,
     /// Show agent labels in split pane borders when no manual pane label is set. Default: false.
     pub show_agent_labels_on_pane_borders: bool,
+    /// Show aggregate agent state in top tab labels. Default: off.
+    pub tab_agent_status_indicator: TabAgentStatusIndicatorConfig,
     /// Hide the tab row when the workspace has one tab. Default: false.
     pub hide_tab_bar_when_single_tab: bool,
     /// Agent sidebar ordering. Saved values are "spaces" or "priority". Default: "spaces".
@@ -1006,6 +1040,7 @@ impl Default for UiConfig {
             pane_borders: true,
             pane_gaps: true,
             show_agent_labels_on_pane_borders: false,
+            tab_agent_status_indicator: TabAgentStatusIndicatorConfig::Off,
             hide_tab_bar_when_single_tab: false,
             agent_panel_sort: AgentPanelSortConfig::Spaces,
             sidebar: SidebarConfig::default(),
@@ -1237,6 +1272,10 @@ agent_panel_scope = "current"
         assert!(default_config.ui.pane_borders);
         assert!(default_config.ui.pane_gaps);
         assert!(!default_config.ui.show_agent_labels_on_pane_borders);
+        assert_eq!(
+            default_config.ui.tab_agent_status_indicator,
+            TabAgentStatusIndicatorConfig::Off
+        );
         assert!(!default_config.ui.hide_tab_bar_when_single_tab);
 
         let toml = r#"
@@ -1244,12 +1283,17 @@ agent_panel_scope = "current"
 pane_borders = false
 pane_gaps = true
 show_agent_labels_on_pane_borders = true
+tab_agent_status_indicator = "icons"
 hide_tab_bar_when_single_tab = true
 "#;
         let config: Config = toml::from_str(toml).unwrap();
         assert!(!config.ui.pane_borders);
         assert!(config.ui.pane_gaps);
         assert!(config.ui.show_agent_labels_on_pane_borders);
+        assert_eq!(
+            config.ui.tab_agent_status_indicator,
+            TabAgentStatusIndicatorConfig::Icons
+        );
         assert!(config.ui.hide_tab_bar_when_single_tab);
     }
 

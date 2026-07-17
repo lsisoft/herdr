@@ -322,6 +322,15 @@ impl App {
                         SettingsAction::SaveAgentBorderLabels(enabled) => {
                             self.save_agent_border_labels(enabled)
                         }
+                        SettingsAction::SaveTabAgentStatusIndicator(indicator) => {
+                            self.save_tab_agent_status_indicator(indicator)
+                        }
+                        SettingsAction::SaveSidebarStartCollapsed(enabled) => {
+                            self.save_sidebar_start_collapsed(enabled)
+                        }
+                        SettingsAction::SaveSidebarCollapsedMode(mode) => {
+                            self.save_sidebar_collapsed_mode(mode)
+                        }
                         SettingsAction::SavePaneHistory(enabled) => {
                             self.save_pane_history_persistence(enabled)
                         }

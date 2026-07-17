@@ -12,10 +12,10 @@ use super::widgets::{
 };
 use crate::{
     app::{
-        state::{ExperimentSetting, Palette},
+        state::{ExperimentSetting, ExperimentSettingsRow, Palette},
         AppState,
     },
-    config::ToastDelivery,
+    config::{SidebarCollapsedModeConfig, TabAgentStatusIndicatorConfig, ToastDelivery},
 };
 
 pub(crate) const SETTINGS_POPUP_WIDTH: u16 = 76;
@@ -147,6 +147,23 @@ pub(super) fn render_settings_overlay(app: &AppState, frame: &mut Frame, area: R
                 "show detected agent names in split pane borders",
                 app.agent_border_labels_enabled(),
                 app.settings.list.selected,
+            );
+        }
+        SettingsSection::TabStatus => {
+            render_modal_choice_list(
+                frame,
+                content_area,
+                "tab agent status",
+                "show aggregate agent state on top tab labels",
+                &[
+                    ("off", TabAgentStatusIndicatorConfig::Off),
+                    ("dots", TabAgentStatusIndicatorConfig::Dots),
+                    ("icons", TabAgentStatusIndicatorConfig::Icons),
+                ],
+                app.tab_agent_status_indicator(),
+                app.settings.list.selected,
+                p,
+                1,
             );
         }
         SettingsSection::Experiments => {
@@ -429,8 +446,7 @@ fn render_settings_experiments(app: &AppState, frame: &mut Frame, area: Rect) {
         Style::default().fg(p.overlay1),
     );
 
-    for (idx, setting) in ExperimentSetting::ALL.iter().copied().enumerate() {
-        let marker = if setting.enabled(app) { "[✓]" } else { "[ ]" };
+    for (idx, row_kind) in ExperimentSettingsRow::ALL.iter().copied().enumerate() {
         let style = if app.settings.list.selected == idx {
             Style::default()
                 .bg(p.surface0)
@@ -441,9 +457,56 @@ fn render_settings_experiments(app: &AppState, frame: &mut Frame, area: Rect) {
         };
         let row = Rect::new(list_area.x, list_area.y + idx as u16, list_area.width, 1);
         frame.render_widget(
-            Paragraph::new(format!(" {} {marker}", setting.label())).style(style),
+            Paragraph::new(experiment_row_text(app, row_kind)).style(style),
             row,
         );
+    }
+}
+
+fn experiment_row_text(app: &AppState, row: ExperimentSettingsRow) -> String {
+    match row {
+        ExperimentSettingsRow::PaneHistory => {
+            let marker = if ExperimentSetting::PaneHistory.enabled(app) {
+                "[✓]"
+            } else {
+                "[ ]"
+            };
+            format!(" {} {marker}", ExperimentSetting::PaneHistory.label())
+        }
+        ExperimentSettingsRow::SwitchAsciiInputSourceInPrefix => {
+            let marker = if ExperimentSetting::SwitchAsciiInputSourceInPrefix.enabled(app) {
+                "[✓]"
+            } else {
+                "[ ]"
+            };
+            format!(
+                " {} {marker}",
+                ExperimentSetting::SwitchAsciiInputSourceInPrefix.label()
+            )
+        }
+        ExperimentSettingsRow::TabAgentStatusIndicator => {
+            let value = match app.tab_agent_status_indicator() {
+                TabAgentStatusIndicatorConfig::Off => "off",
+                TabAgentStatusIndicatorConfig::Dots => "dots",
+                TabAgentStatusIndicatorConfig::Icons => "icons",
+            };
+            format!(" top tab agent status {value}")
+        }
+        ExperimentSettingsRow::SidebarStartCollapsed => {
+            let marker = if app.sidebar_start_collapsed_enabled() {
+                "[✓]"
+            } else {
+                "[ ]"
+            };
+            format!(" sidebar starts collapsed {marker}")
+        }
+        ExperimentSettingsRow::SidebarCollapsedMode => {
+            let value = match app.sidebar_collapsed_mode() {
+                SidebarCollapsedModeConfig::Compact => "compact",
+                SidebarCollapsedModeConfig::Hidden => "hidden",
+            };
+            format!(" collapsed sidebar mode {value}")
+        }
     }
 }
 
@@ -527,5 +590,34 @@ mod tests {
             .collect::<String>();
 
         assert!(rendered.contains("switch to ascii input source in prefix (macOS) [✓]"));
+    }
+
+    #[test]
+    fn experiments_renders_tab_status_and_sidebar_rows() {
+        let mut app = AppState::test_new();
+        app.tab_agent_status_indicator = TabAgentStatusIndicatorConfig::Dots;
+        app.sidebar_start_collapsed = true;
+        app.sidebar_collapsed_mode = SidebarCollapsedModeConfig::Hidden;
+        app.settings.section = SettingsSection::Experiments;
+        app.settings.list.selected = 2;
+        app.mode = Mode::Settings;
+
+        let mut terminal =
+            Terminal::new(TestBackend::new(80, 24)).expect("test terminal should initialize");
+        terminal
+            .draw(|frame| render_settings_overlay(&app, frame, Rect::new(0, 0, 80, 24)))
+            .expect("settings overlay should render");
+
+        let rendered = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+
+        assert!(rendered.contains("top tab agent status dots"));
+        assert!(rendered.contains("sidebar starts collapsed [✓]"));
+        assert!(rendered.contains("collapsed sidebar mode hidden"));
     }
 }

@@ -92,6 +92,46 @@ impl App {
         }
     }
 
+    pub(super) fn save_tab_agent_status_indicator(
+        &mut self,
+        indicator: crate::config::TabAgentStatusIndicatorConfig,
+    ) {
+        if self.update_config_file("tab agent status indicator", |content| {
+            crate::config::upsert_section_value(
+                content,
+                "ui",
+                "tab_agent_status_indicator",
+                &format!("\"{}\"", indicator.as_str()),
+            )
+        }) {
+            self.apply_config_from_disk(false);
+        }
+    }
+
+    pub(super) fn save_sidebar_start_collapsed(&mut self, enabled: bool) {
+        if self.update_config_file("sidebar start collapsed", |content| {
+            crate::config::upsert_section_bool(content, "ui", "sidebar_start_collapsed", enabled)
+        }) {
+            self.apply_config_from_disk(false);
+        }
+    }
+
+    pub(super) fn save_sidebar_collapsed_mode(
+        &mut self,
+        mode: crate::config::SidebarCollapsedModeConfig,
+    ) {
+        if self.update_config_file("sidebar collapsed mode", |content| {
+            crate::config::upsert_section_value(
+                content,
+                "ui",
+                "sidebar_collapsed_mode",
+                &format!("\"{}\"", mode.as_str()),
+            )
+        }) {
+            self.apply_config_from_disk(false);
+        }
+    }
+
     pub(super) fn save_pane_history_persistence(&mut self, enabled: bool) {
         if self.update_config_file("pane screen history", |content| {
             crate::config::upsert_section_bool(content, "experimental", "pane_history", enabled)
