@@ -649,7 +649,7 @@ mod tests {
     }
 
     #[test]
-    fn metadata_title_takes_pane_border_priority() {
+    fn manual_label_takes_pane_border_priority_over_metadata_title() {
         let mut terminal = test_terminal();
         terminal.set_detected_state(Some(Agent::Claude), AgentState::Idle);
         terminal.set_manual_label("manual".into());
@@ -667,6 +667,11 @@ mod tests {
             seq: None,
         });
 
+        assert_eq!(terminal.border_label(false).as_deref(), Some("manual"));
+        assert_eq!(terminal.border_label(true).as_deref(), Some("manual"));
+        assert_eq!(terminal.effective_title().as_deref(), Some("Prompt title"));
+
+        terminal.clear_manual_label();
         assert_eq!(
             terminal.border_label(false).as_deref(),
             Some("Prompt title")

@@ -2505,6 +2505,22 @@ mod tests {
 
         assert_eq!(response["result"]["type"], "pane_info");
         assert_eq!(response["result"]["pane"]["label"], "reviewer");
+        assert_eq!(app.tab_info(0, 0).unwrap().label, "reviewer");
+        assert!(app.state.workspaces[0].tabs[0].is_auto_named());
+        assert!(app.event_hub.events_after(0).iter().any(|(_, event)| {
+            matches!(
+                &event.data,
+                crate::api::schema::EventData::PaneUpdated { pane }
+                    if pane.label.as_deref() == Some("reviewer")
+            )
+        }));
+        assert!(app.event_hub.events_after(0).iter().any(|(_, event)| {
+            matches!(
+                &event.data,
+                crate::api::schema::EventData::TabRenamed { label, .. }
+                    if label == "reviewer"
+            )
+        }));
         let terminal_id = app.state.workspaces[0]
             .pane_state(pane)
             .unwrap()
@@ -2531,6 +2547,22 @@ mod tests {
 
         assert_eq!(response["result"]["type"], "pane_info");
         assert!(response["result"]["pane"].get("label").is_none());
+        assert_eq!(app.tab_info(0, 0).unwrap().label, "1");
+        assert!(app.event_hub.events_after(0).iter().any(|(_, event)| {
+            matches!(
+                &event.data,
+                crate::api::schema::EventData::PaneUpdated { pane }
+                    if pane.label.is_none()
+            )
+        }));
+        assert!(app.event_hub.events_after(0).iter().any(|(_, event)| {
+            matches!(
+                &event.data,
+                crate::api::schema::EventData::TabRenamed { label, .. }
+                    if label == "1"
+            )
+        }));
+        app.state.workspaces[0].assert_invariants_for_test();
         assert!(app
             .state
             .terminals
@@ -2538,6 +2570,59 @@ mod tests {
             .unwrap()
             .manual_label
             .is_none());
+    }
+
+    #[test]
+    fn pane_rename_preserves_explicit_tabs_and_ignores_non_root_labels() {
+        for rename_root_with_explicit_tab in [false, true] {
+            let mut app = test_app();
+            let mut workspace = Workspace::test_new("pane-rename");
+            let root = workspace.tabs[0].root_pane;
+            let split = workspace.test_split(ratatui::layout::Direction::Horizontal);
+            let pane = if rename_root_with_explicit_tab {
+                workspace.tabs[0].set_custom_name("explicit".into());
+                root
+            } else {
+                split
+            };
+            app.state.workspaces = vec![workspace];
+            app.state.ensure_test_terminals();
+            app.state.active = Some(0);
+            app.state.selected = 0;
+            let pane_id = app.pane_info(0, pane).unwrap().pane_id;
+
+            let response = app.handle_api_request(crate::api::schema::Request {
+                id: "rename".into(),
+                method: crate::api::schema::Method::PaneRename(
+                    crate::api::schema::PaneRenameParams {
+                        pane_id,
+                        label: Some("reviewer".into()),
+                    },
+                ),
+            });
+            let response: serde_json::Value = serde_json::from_str(&response).unwrap();
+
+            assert_eq!(response["result"]["pane"]["label"], "reviewer");
+            assert_eq!(
+                app.tab_info(0, 0).unwrap().label,
+                if rename_root_with_explicit_tab {
+                    "explicit"
+                } else {
+                    "1"
+                }
+            );
+            let events = app.event_hub.events_after(0);
+            assert!(events.iter().any(|(_, event)| matches!(
+                &event.data,
+                crate::api::schema::EventData::PaneUpdated { pane }
+                    if pane.label.as_deref() == Some("reviewer")
+            )));
+            assert!(!events.iter().any(|(_, event)| matches!(
+                &event.data,
+                crate::api::schema::EventData::TabRenamed { .. }
+            )));
+            app.state.workspaces[0].assert_invariants_for_test();
+        }
     }
 
     #[test]

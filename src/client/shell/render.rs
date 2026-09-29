@@ -315,6 +315,10 @@ pub(super) fn render_shell(
             layout.tab_bar,
             snapshot,
             config,
+            state.endpoints.iter().any(|endpoint| {
+                endpoint.endpoint_id == *state.active_endpoint_id
+                    && endpoint.status != ClientEndpointStatus::Online
+            }),
             state.tab_scroll,
             state.reveal_focused_tab,
             state.tab_drag_insert_index,

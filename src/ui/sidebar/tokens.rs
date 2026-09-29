@@ -93,6 +93,8 @@ pub(crate) fn agent_rows(
                             .map(|value| ResolvedTokenKind::Tab(value.to_string())),
                         AgentSidebarToken::Pane => context
                             .pane
+                            // A root pane label can also supply the automatic tab label.
+                            .filter(|value| context.tab != Some(*value))
                             .map(|value| ResolvedTokenKind::Pane(value.to_string())),
                         AgentSidebarToken::Agent => context
                             .agent_label

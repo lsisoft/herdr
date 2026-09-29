@@ -258,6 +258,7 @@ mod input_conformance;
 mod input_domain;
 mod keybindings_settings;
 mod link_hover;
+mod manual_pane_labels;
 mod mobile;
 mod mouse_selection;
 mod popup_focus_projection;

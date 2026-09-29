@@ -1487,6 +1487,18 @@ impl App {
         let Some((ws_idx, pane_id)) = self.parse_pane_id(&params.pane_id) else {
             return pane_not_found(id, &params.pane_id);
         };
+        let Some(tab_idx) = self
+            .state
+            .workspaces
+            .get(ws_idx)
+            .and_then(|ws| ws.find_tab_index_for_pane(pane_id))
+        else {
+            return pane_not_found(id, &params.pane_id);
+        };
+        let root_auto_named_tab = self.state.workspaces[ws_idx]
+            .tabs
+            .get(tab_idx)
+            .is_some_and(|tab| tab.root_pane == pane_id && tab.is_auto_named());
         let Some(terminal_id) = self
             .state
             .workspaces
@@ -1505,6 +1517,22 @@ impl App {
         }
         self.state.mark_session_dirty();
         let pane = self.pane_info(ws_idx, pane_id).unwrap();
+        self.emit_event(EventEnvelope {
+            event: EventKind::PaneUpdated,
+            data: EventData::PaneUpdated { pane: pane.clone() },
+        });
+        if root_auto_named_tab {
+            if let Some(tab) = self.tab_info(ws_idx, tab_idx) {
+                self.emit_event(EventEnvelope {
+                    event: EventKind::TabRenamed,
+                    data: EventData::TabRenamed {
+                        tab_id: tab.tab_id,
+                        workspace_id: tab.workspace_id,
+                        label: tab.label,
+                    },
+                });
+            }
+        }
 
         encode_success(id, ResponseResult::PaneInfo { pane })
     }

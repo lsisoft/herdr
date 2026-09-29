@@ -2631,8 +2631,8 @@ impl TerminalState {
     }
 
     pub fn border_label(&self, show_agent_labels: bool) -> Option<String> {
-        self.effective_title().or_else(|| {
-            self.manual_label.clone().or_else(|| {
+        self.manual_label.clone().or_else(|| {
+            self.effective_title().or_else(|| {
                 show_agent_labels
                     .then(|| {
                         self.effective_display_agent()

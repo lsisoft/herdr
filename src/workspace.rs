@@ -448,6 +448,23 @@ impl Workspace {
         )
     }
 
+    /// A manually named root pane labels an otherwise automatic tab.
+    /// An explicitly named tab remains authoritative.
+    pub fn tab_display_name_from_terminals(
+        &self,
+        tab_idx: usize,
+        terminals: &HashMap<TerminalId, TerminalState>,
+    ) -> Option<String> {
+        let tab = self.tabs.get(tab_idx)?;
+        Some(tab.custom_name.clone().unwrap_or_else(|| {
+            tab.panes
+                .get(&tab.root_pane)
+                .and_then(|pane| terminals.get(&pane.attached_terminal_id))
+                .and_then(|terminal| terminal.manual_label.clone())
+                .unwrap_or_else(|| (tab_idx + 1).to_string())
+        }))
+    }
+
     pub fn switch_tab(&mut self, idx: usize) {
         if idx < self.tabs.len() {
             self.active_tab = idx;
@@ -1642,6 +1659,58 @@ mod tests {
             ws.resolved_identity_cwd_from(&terminals, &terminal_runtimes),
             Some(PathBuf::from("/herdr-test/pion"))
         );
+    }
+
+    #[test]
+    fn automatic_tab_display_name_uses_only_the_manual_root_pane_label() {
+        let mut ws = Workspace::test_new("test");
+        let root = ws.tabs[0].root_pane;
+        let split = ws.test_split(Direction::Horizontal);
+        let root_terminal_id = ws.terminal_id(root).unwrap().clone();
+        let split_terminal_id = ws.terminal_id(split).unwrap().clone();
+        let root_terminal = TerminalState::new(root_terminal_id.clone(), "/tmp".into());
+        let mut split_terminal = TerminalState::new(split_terminal_id.clone(), "/tmp".into());
+        split_terminal.set_manual_label("split reviewer".into());
+        let mut terminals = HashMap::from([
+            (root_terminal_id.clone(), root_terminal),
+            (split_terminal_id, split_terminal),
+        ]);
+
+        assert_eq!(
+            ws.tab_display_name_from_terminals(0, &terminals).as_deref(),
+            Some("1")
+        );
+        terminals
+            .get_mut(&root_terminal_id)
+            .unwrap()
+            .set_manual_label("reviewer".into());
+        assert_eq!(
+            ws.tab_display_name_from_terminals(0, &terminals).as_deref(),
+            Some("reviewer")
+        );
+        assert!(ws.tabs[0].is_auto_named());
+
+        ws.tabs[0].set_custom_name("explicit tab".into());
+        assert_eq!(
+            ws.tab_display_name_from_terminals(0, &terminals).as_deref(),
+            Some("explicit tab")
+        );
+        ws.tabs[0].custom_name = None;
+        terminals
+            .get_mut(&root_terminal_id)
+            .unwrap()
+            .clear_manual_label();
+        assert_eq!(
+            ws.tab_display_name_from_terminals(0, &terminals).as_deref(),
+            Some("1")
+        );
+        assert_eq!(
+            ws.tab_display_name_from_terminals(0, &HashMap::new())
+                .as_deref(),
+            Some("1")
+        );
+        assert!(ws.tab_display_name_from_terminals(1, &terminals).is_none());
+        ws.assert_invariants_for_test();
     }
 
     #[test]

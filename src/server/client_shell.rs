@@ -718,6 +718,56 @@ mod tests {
     }
 
     #[test]
+    fn snapshot_projects_manual_root_labels_without_changing_tab_identity() {
+        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = crate::app::App::new(
+            &crate::config::Config::default(),
+            crate::app::AppPolicy::TEST,
+            None,
+            api_rx,
+            crate::api::EventHub::default(),
+        );
+        let workspace = crate::workspace::Workspace::test_new("review");
+        let root = workspace.tabs[0].root_pane;
+        let terminal_id = workspace.terminal_id(root).unwrap().clone();
+        app.state.workspaces = vec![workspace];
+        app.state.ensure_test_terminals();
+        app.state.active = Some(0);
+        let before = snapshot(&app, "boot", 1, None, None);
+
+        app.state
+            .terminals
+            .get_mut(&terminal_id)
+            .unwrap()
+            .set_manual_label("reviewer".into());
+        let named = snapshot(&app, "boot", 2, None, None);
+        assert_eq!(named.tabs[0].label, "reviewer");
+        assert!(!named.tabs[0].custom_label);
+        assert_eq!(named.tabs[0].tab_id, before.tabs[0].tab_id);
+        assert_eq!(named.panes[0].pane_id, before.panes[0].pane_id);
+        assert_eq!(named.panes[0].label.as_deref(), Some("reviewer"));
+
+        app.state.workspaces[0].tabs[0].set_custom_name("explicit".into());
+        let explicit = snapshot(&app, "boot", 3, None, None);
+        assert_eq!(explicit.tabs[0].label, "explicit");
+        assert!(explicit.tabs[0].custom_label);
+        assert_eq!(explicit.tabs[0].tab_id, before.tabs[0].tab_id);
+
+        app.state.workspaces[0].tabs[0].custom_name = None;
+        app.state
+            .terminals
+            .get_mut(&terminal_id)
+            .unwrap()
+            .clear_manual_label();
+        let cleared = snapshot(&app, "boot", 4, None, None);
+        assert_eq!(cleared.tabs[0].label, before.tabs[0].label);
+        assert!(!cleared.tabs[0].custom_label);
+        assert_eq!(cleared.tabs[0].tab_id, before.tabs[0].tab_id);
+        assert_eq!(cleared.panes[0].label, None);
+        app.state.workspaces[0].assert_invariants_for_test();
+    }
+
+    #[test]
     fn snapshot_projects_cached_release_and_update_facts() {
         let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
         let mut app = crate::app::App::new(
