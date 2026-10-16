@@ -10,7 +10,20 @@ const AGENT = "opencode";
 const ROUTE_POLL_INTERVAL_MS = 100;
 const SELECTION_RETRY_DELAYS_MS = [100, 400, 1_000];
 
-function requestOnce(sessionID, state, seq, isCurrent = () => true) {
+function runtimeFromSession(info) {
+  const model = info?.model ?? info;
+  const modelID = model?.modelID ?? model?.id;
+  if (typeof model?.providerID !== "string" || !model.providerID ||
+      typeof modelID !== "string" || !modelID) return;
+  return {
+    model: `${model.providerID}/${modelID}`,
+    ...(typeof info.agent === "string" && info.agent ? { agent_profile: info.agent } : {}),
+    ...(typeof (model.variant ?? info.variant) === "string" && (model.variant ?? info.variant)
+      ? { variant: model.variant ?? info.variant } : {}),
+  };
+}
+
+function requestOnce(sessionID, state, seq, isCurrent = () => true, runtime) {
   const paneId = process.env.HERDR_PANE_ID;
   const socketPath = process.env.HERDR_SOCKET_PATH;
   if (!paneId || !socketPath) {
@@ -29,6 +42,7 @@ function requestOnce(sessionID, state, seq, isCurrent = () => true) {
       source: SOURCE,
       agent: AGENT,
       agent_session_id: sessionID,
+      ...(runtime ? { runtime } : {}),
       ...(state === undefined ? { session_start_source: "select" } : { state, seq }),
     },
   };
@@ -162,7 +176,8 @@ async function tui(api) {
         (ctx.settled || root(ctx, ctx.route) === selected);
       if (!isCurrent()) return;
       if (ctx.selectionPending) {
-        if (!await requestOnce(selected, undefined, undefined, isCurrent)) {
+        if (!await requestOnce(selected, undefined, undefined, isCurrent,
+            ctx.runtime ?? runtimeFromSession(ctx.sessions?.get(selected) ?? api.state.session.get(selected)))) {
           ctx.retryAt = Date.now() + 500;
           return;
         }
@@ -171,10 +186,13 @@ async function tui(api) {
         ctx.lastState = undefined;
       }
       const value = state(ctx);
-      if (value === undefined || value === ctx.lastState) return;
-      const delivered = await requestOnce(selected, value, ++sequence, isCurrent);
+      const runtime = ctx.runtime ?? runtimeFromSession(ctx.sessions?.get(selected) ?? api.state.session.get(selected));
+      const runtimeKey = JSON.stringify(runtime);
+      if (value === undefined || (value === ctx.lastState && runtimeKey === ctx.lastRuntime)) return;
+      const delivered = await requestOnce(selected, value, ++sequence, isCurrent, runtime);
       if (!isCurrent()) return;
       ctx.lastState = delivered ? value : undefined;
+      ctx.lastRuntime = delivered ? runtimeKey : undefined;
       if (!delivered) ctx.retryAt = Date.now() + 500;
     }).catch(() => {
       if (current(ctx)) {
@@ -234,6 +252,17 @@ async function tui(api) {
   function apply(ctx, event) {
     const data = event.properties;
     if (!data) return;
+    if (event.type === "message.updated") {
+      const id = data.sessionID ?? data.info?.sessionID;
+      const info = data.info;
+      const compaction = info?.role === "assistant" &&
+        (info.summary === true || info.agent === "compaction" || info.mode === "compaction");
+      if (id === ctx.selected && ["user", "assistant"].includes(info?.role) && !compaction) {
+        const runtime = runtimeFromSession(data.info);
+        if (runtime) ctx.runtime = runtime;
+      }
+      return;
+    }
     if (event.type === "message.part.updated") {
       const part = data.part;
       if (terminalTool(part)) {
@@ -248,6 +277,10 @@ async function tui(api) {
       case "session.created":
       case "session.updated":
         if (data.info) ctx.sessions.set(id, data.info);
+        if (id === ctx.selected) {
+          const runtime = runtimeFromSession(data.info);
+          if (runtime) ctx.runtime = runtime;
+        }
         break;
       case "session.deleted":
         ctx.deleted.add(id);
@@ -380,7 +413,7 @@ async function tui(api) {
   const subscriptions = [
     "session.created", "session.updated", "session.deleted", "session.status", "session.idle", "session.error",
     "permission.asked", "permission.replied", "question.asked", "question.replied", "question.rejected",
-    "message.part.updated",
+    "message.part.updated", "message.updated",
   ].map((type) => api.event.on(type, (event) => {
     if (type === "message.part.updated" && !terminalTool(event.properties?.part)) return;
     syncSelection();
@@ -414,6 +447,9 @@ function setup(api) {
   let retryIndex = 0;
   let nextSelectionAt = 0;
   let state = "idle";
+  let runtime;
+  let runtimeKey;
+  let runtimeOverrides = {};
   let retryTimer;
   const sessions = new Map();
   let blockers = new Map();
@@ -445,7 +481,7 @@ function setup(api) {
     const isCurrent = () => !disposed && revision === generation && !!sessionID && current() === sessionID;
     chain = chain.then(async () => {
       if (!isCurrent()) return;
-      const delivered = await requestOnce(sessionID, value, value === undefined ? undefined : ++sequence, isCurrent);
+      const delivered = await requestOnce(sessionID, value, value === undefined ? undefined : ++sequence, isCurrent, runtime);
       if (!delivered) scheduleStateRetry();
     }).catch(() => {});
   }
@@ -516,14 +552,26 @@ function setup(api) {
       nextSelectionAt = 0;
       blockers.clear();
       blockerChanges.clear();
+      runtime = undefined;
+      runtimeKey = undefined;
+      runtimeOverrides = {};
       if (id) {
         state = api.data.session.status(id) === "running" ? "working" : "idle";
       }
     }
     if (!id) return;
+    const session = api.data.session.get(id);
+    for (const key of Object.keys(runtimeOverrides)) {
+      if (JSON.stringify(session?.[key]) === JSON.stringify(runtimeOverrides[key])) delete runtimeOverrides[key];
+    }
+    const nextRuntime = runtimeFromSession({ ...session, ...runtimeOverrides });
+    const nextRuntimeKey = JSON.stringify(nextRuntime);
+    const runtimeChanged = nextRuntimeKey !== runtimeKey;
+    runtime = nextRuntime;
+    runtimeKey = nextRuntimeKey;
     const blockersChanged = reconcileBlockers();
     if (Date.now() < nextSelectionAt) {
-      if (blockersChanged) publish();
+      if (blockersChanged || runtimeChanged) publish();
       return;
     }
     enqueue(undefined);
@@ -536,6 +584,14 @@ function setup(api) {
     if (disposed) return;
     const data = event.data;
     if (data == null) return;
+    if (["session.model.selected", "session.agent.selected"].includes(event.type)) {
+      syncSelection();
+      if (data.sessionID !== selected) return;
+      const key = event.type === "session.model.selected" ? "model" : "agent";
+      runtimeOverrides[key] = data[key];
+      syncSelection();
+      return;
+    }
     if (event.type === "session.created") {
       sessions.set(data.sessionID, { id: data.sessionID, parentID: data.parentID });
     }

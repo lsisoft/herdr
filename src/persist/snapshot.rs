@@ -522,16 +522,73 @@ fn capture_resume_runtime(
                 })
             }),
     );
-    merge(terminal.agent_runtime.clone());
-    merge(crate::agent_runtime::from_native_session(
-        source,
-        agent,
-        session_ref,
-    ));
+    if (source, agent) == ("herdr:opencode", "opencode") {
+        // OpenCode reports a complete current profile. In particular an
+        // omitted agent/variant must not be resurrected from launch argv.
+        if let Some(settings) = terminal.agent_runtime.clone() {
+            captured = settings;
+            found = true;
+        }
+    } else {
+        merge(terminal.agent_runtime.clone());
+    }
+    if let Some(observation) =
+        crate::agent_runtime::cached_native_session(source, agent, session_ref)
+    {
+        captured = observation.apply_to(captured);
+        found = true;
+    }
 
     found
         .then_some(captured)
         .and_then(|settings| settings.validated(source, agent))
+}
+
+/// Called by the persistence worker, after pure snapshot capture. Native file
+/// discovery and transcript scans must not run in the server's autosave loop.
+pub(crate) fn enrich_native_runtime(
+    snapshot: &mut SessionSnapshot,
+    history: Option<&mut SessionHistorySnapshot>,
+) {
+    enrich_native_runtime_with(snapshot, history, |session| {
+        let identity = crate::agent_resume::session_ref_from_snapshot(
+            &session.source,
+            &session.agent,
+            session.kind,
+            &session.value,
+        )?;
+        crate::agent_runtime::from_native_session(
+            &session.source,
+            &session.agent,
+            &identity.session_ref,
+        )
+        .map(|observation| observation.apply_to(session.runtime.clone().unwrap_or_default()))
+    });
+}
+
+fn enrich_native_runtime_with(
+    snapshot: &mut SessionSnapshot,
+    history: Option<&mut SessionHistorySnapshot>,
+    mut observe: impl FnMut(
+        &PaneAgentSessionSnapshot,
+    ) -> Option<crate::agent_runtime::AgentRuntimeSettings>,
+) {
+    for session in snapshot
+        .workspaces
+        .iter_mut()
+        .flat_map(|workspace| &mut workspace.tabs)
+        .flat_map(|tab| tab.panes.values_mut())
+        .filter_map(|pane| pane.agent_session.as_mut())
+    {
+        if let Some(runtime) = observe(session) {
+            session.runtime = runtime.validated(&session.source, &session.agent);
+        }
+    }
+    // Runtime fields are part of the fingerprint too. Keep saved screen history
+    // paired with the final snapshot, not the pre-enrichment capture.
+    if let Some(history) = history {
+        history.layout_fingerprint = layout_fingerprint(snapshot);
+    }
 }
 
 /// Capture pane screen history separately from the structural session snapshot.
@@ -1491,6 +1548,97 @@ mod tests {
             crate::agent_resume::AgentSessionRefKind::Id
         );
         assert_eq!(agent_session.value, "opencode-session");
+    }
+
+    #[test]
+    fn complete_opencode_runtime_does_not_resurrect_launch_defaults() {
+        let mut state = state_with_workspaces(&["one"]);
+        let root = state.workspaces[0].tabs[0].root_pane;
+        state.ensure_test_terminals();
+        let terminal_id = state.workspaces[0].tabs[0].panes[&root]
+            .attached_terminal_id
+            .clone();
+        let terminal = state.terminals.get_mut(&terminal_id).unwrap();
+        terminal.set_persisted_agent_session(crate::agent_resume::PersistedAgentSession {
+            source: "herdr:opencode".into(),
+            agent: "opencode".into(),
+            session_ref: crate::agent_resume::AgentSessionRef::id("session").unwrap(),
+        });
+        terminal.launch_argv = Some(
+            [
+                "opencode",
+                "--model",
+                "provider/old",
+                "--agent",
+                "build",
+                "--variant",
+                "high",
+            ]
+            .map(str::to_owned)
+            .to_vec(),
+        );
+        terminal.set_persisted_agent_runtime(Some(crate::agent_runtime::AgentRuntimeSettings {
+            model: Some("provider/new".into()),
+            ..Default::default()
+        }));
+        let snapshot = capture_from_state(&state);
+        let profile = snapshot.workspaces[0].tabs[0].panes[&root.raw()]
+            .agent_session
+            .as_ref()
+            .unwrap()
+            .runtime
+            .as_ref()
+            .unwrap();
+        assert_eq!(profile.model.as_deref(), Some("provider/new"));
+        assert_eq!(profile.agent_profile, None);
+        assert_eq!(profile.variant, None);
+    }
+
+    #[test]
+    fn runtime_enrichment_keeps_nonempty_history_fingerprint_in_sync() {
+        let state = state_with_workspaces(&["one"]);
+        let root = state.workspaces[0].tabs[0].root_pane.raw();
+        let mut snapshot = capture_from_state(&state);
+        snapshot.workspaces[0].tabs[0]
+            .panes
+            .get_mut(&root)
+            .unwrap()
+            .agent_session = Some(PaneAgentSessionSnapshot {
+            source: "herdr:codex".into(),
+            agent: "codex".into(),
+            kind: crate::agent_resume::AgentSessionRefKind::Id,
+            value: "runtime-history-test".into(),
+            access: None,
+            runtime: None,
+        });
+        let mut history = SessionHistorySnapshot {
+            version: SNAPSHOT_VERSION,
+            layout_fingerprint: layout_fingerprint(&snapshot),
+            workspaces: vec![WorkspaceHistorySnapshot {
+                tabs: vec![TabHistorySnapshot {
+                    panes: HashMap::from([(
+                        root,
+                        PaneHistorySnapshot {
+                            ansi: "saved terminal output\r\n".into(),
+                            lines: 1,
+                        },
+                    )]),
+                }],
+            }],
+        };
+        let before = history.layout_fingerprint.clone();
+        enrich_native_runtime_with(&mut snapshot, Some(&mut history), |_| {
+            Some(crate::agent_runtime::AgentRuntimeSettings {
+                model: Some("observed-model".into()),
+                ..Default::default()
+            })
+        });
+        assert_ne!(before, history.layout_fingerprint);
+        assert_eq!(history.layout_fingerprint, layout_fingerprint(&snapshot));
+        assert_eq!(
+            history.workspaces[0].tabs[0].panes[&root].ansi,
+            "saved terminal output\r\n"
+        );
     }
 
     #[test]

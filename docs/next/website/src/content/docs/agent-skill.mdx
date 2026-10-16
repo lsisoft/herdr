@@ -5,13 +5,13 @@ description: Install Herdr instructions for Claude Code or another coding agent.
 
 Herdr ships a reusable agent skill file at [`skills/herdr/SKILL.md`](https://github.com/herdrdev/herdr/blob/master/skills/herdr/SKILL.md).
 
-Install that file into any coding agent that supports reusable skills or custom instructions. The skill teaches the agent how to control Herdr from inside a Herdr pane.
+Install that file into any coding agent that supports reusable skills or custom instructions. This fork also supports explicitly requested control from an agent outside a Herdr pane.
 
 Herdr also serves a separate guide at [`herdr.dev/agent-guide.md`](https://herdr.dev/agent-guide.md) for a different job: an agent helping a human learn, set up, or troubleshoot Herdr. The skill is for an agent operating Herdr; the guide is for an agent teaching a human.
 
 ## What the skill does
 
-The skill tells an agent to use the `herdr` CLI when `HERDR_ENV=1` is set. That means the agent is running inside a Herdr-managed pane and can safely talk to the local Herdr socket.
+The skill uses `HERDR_ENV=1` to identify a managed caller. An external controller instead selects a named session or saved machine, discovers its live objects, and uses explicit pane IDs or unique agent names.
 
 With the skill installed, an agent can:
 
@@ -52,11 +52,11 @@ claude
 
 Or use any other coding agent in a Herdr pane so `HERDR_ENV=1` is available to the agent process.
 
-## Safety rule
+## Target selection
 
-The skill starts with one guardrail: if `HERDR_ENV=1` is not set, the agent should stop and say it is not running inside a Herdr-managed pane.
+An external controller must preserve the chosen session or machine selector on every command. It must not use `--current`, inherited caller IDs, or another client's focus to choose a target.
 
-This prevents an agent outside Herdr from trying to control a session it does not own.
+If several sessions match the request, the controller asks which session to use before sending input. For this behaviour, install the [fork skill](https://github.com/lsisoft/herdr/blob/custom/herdr/skills/herdr/SKILL.md); the upstream install command above installs upstream's separate policy.
 
 ## Agent-facing reference
 

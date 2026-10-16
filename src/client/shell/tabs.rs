@@ -16,6 +16,7 @@ pub(crate) fn render_tab_bar(
     hits: &mut ShellHitMap,
 ) {
     let palette = &config.palette;
+    let reserve_status = config.tab_agent_status != crate::config::TabAgentStatusConfig::Off;
     buffer.set_style(area, Style::default().bg(palette.panel_bg));
     let tabs = snapshot
         .tabs
@@ -26,7 +27,9 @@ pub(crate) fn render_tab_bar(
         .iter()
         .map(|tab| {
             let label = tab_label(tab);
-            display_width(&label).saturating_add(6).max(MIN_TAB_WIDTH)
+            display_width(&label)
+                .saturating_add(4 + u16::from(reserve_status) * 2)
+                .max(MIN_TAB_WIDTH)
         })
         .collect::<Vec<_>>();
     let content = tab_bar_content_area(snapshot, area);
@@ -123,31 +126,35 @@ pub(crate) fn render_tab_bar(
             &" ".repeat(width as usize),
             style,
         );
-        if rect.width >= 3 {
-            let background = if tab.focused {
-                palette.accent
-            } else {
-                palette.surface0
-            };
-            put_text(
-                buffer,
-                rect.x + 1,
-                rect.y,
-                1,
-                status_icon(tab.agent_status, config.status_indicators),
-                Style::default()
-                    .fg(if endpoint_stale {
-                        palette.overlay0
-                    } else {
-                        status_color(tab.agent_status, palette)
-                    })
-                    .bg(background)
-                    .add_modifier(if endpoint_stale {
-                        Modifier::DIM
-                    } else {
-                        Modifier::empty()
-                    }),
+        if reserve_status && rect.width >= 4 {
+            // Keep semantic colors on a neutral gutter, including on the
+            // selected tab. Reserving it for every tab avoids label movement
+            // when a completion is acknowledged or another pane blocks.
+            buffer.set_style(
+                Rect::new(rect.x, rect.y, 3, 1),
+                Style::default().bg(palette.surface0),
             );
+            if config.tab_agent_status.shows(tab.agent_status) {
+                put_text(
+                    buffer,
+                    rect.x + 1,
+                    rect.y,
+                    1,
+                    status_icon(tab.agent_status, config.status_indicators),
+                    Style::default()
+                        .fg(if endpoint_stale {
+                            palette.overlay0
+                        } else {
+                            status_color(tab.agent_status, palette)
+                        })
+                        .bg(palette.surface0)
+                        .add_modifier(if endpoint_stale {
+                            Modifier::DIM
+                        } else {
+                            Modifier::empty()
+                        }),
+                );
+            }
             put_text(
                 buffer,
                 rect.x + 3,
@@ -156,6 +163,16 @@ pub(crate) fn render_tab_bar(
                 &name,
                 style,
             );
+        } else {
+            let padding = rect.width.saturating_sub(display_width(&name));
+            let left = padding / 2;
+            let text = format!(
+                "{empty:left$}{name}{empty:right_padding$}",
+                empty = "",
+                left = left as usize,
+                right_padding = padding.saturating_sub(left) as usize,
+            );
+            put_text(buffer, rect.x, rect.y, rect.width, &text, style);
         }
         hits.tabs.push((rect, tab.tab_id.clone()));
         first_visible.get_or_insert(index);

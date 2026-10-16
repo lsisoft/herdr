@@ -68,8 +68,15 @@ async function loadPlugin() {
   return module.default;
 }
 
+type TestSession = {
+  id: string;
+  parentID?: string;
+  agent?: string;
+  model?: { providerID: string; modelID?: string; id?: string; variant?: string };
+};
+
 function fakeApi() {
-  const sessions = new Map<string, { id: string; parentID?: string }>();
+  const sessions = new Map<string, TestSession>();
   const statuses: Record<string, { type: string }> = {};
   const permissions: Array<{ id: string; sessionID: string; tool?: { messageID: string; callID: string } }> = [];
   const questions: typeof permissions = [];
@@ -131,7 +138,7 @@ function fakeApi() {
         },
       },
     },
-    addSession(session: { id: string; parentID?: string }) {
+    addSession(session: TestSession) {
       sessions.set(session.id, session);
     },
     select(sessionID: string) {
@@ -239,7 +246,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function v2Api() {
-  const sessions = new Map([
+  const sessions = new Map<string, TestSession>([
     ["a", { id: "a" }],
     ["b", { id: "b" }],
     ["child", { id: "child", parentID: "a" }],
@@ -280,6 +287,51 @@ function v2Api() {
 const flushReports = () => new Promise((resolve) => setTimeout(resolve, 10));
 const states = () => requests.filter((r) => requestParam(r, "state") !== undefined)
   .map((r) => requestParam(r, "state"));
+
+test("V1 reports complete selected-session runtime and ignores child/foreign models", async () => {
+  const plugin = await loadPlugin();
+  const tui = fakeApi();
+  tui.addSession({ id: "a", agent: "build", model: { providerID: "p", id: "old", variant: "high" } });
+  tui.addSession({ id: "child", parentID: "a" });
+  tui.select("a");
+  await plugin.tui(tui.api);
+  await flushReports();
+  expect(requestParam(requests.at(-1), "runtime")).toEqual({ model: "p/old", agent_profile: "build", variant: "high" });
+  for (const sessionID of ["child", "other"]) {
+    tui.emit("message.updated", { sessionID, info: { sessionID, role: "user", agent: "foreign", model: { providerID: "p", modelID: "wrong" } } });
+  }
+  await flushReports();
+  expect(requestParam(requests.at(-1), "runtime")).toEqual({ model: "p/old", agent_profile: "build", variant: "high" });
+  tui.emit("message.updated", { sessionID: "a", info: { sessionID: "a", role: "user", model: { providerID: "p", modelID: "new" } } });
+  await flushReports();
+  expect(requestParam(requests.at(-1), "runtime")).toEqual({ model: "p/new" });
+  for (const internal of [{ summary: true }, { agent: "compaction" }, { mode: "compaction" }]) {
+    tui.emit("message.updated", { sessionID: "a", info: {
+      sessionID: "a", role: "assistant", providerID: "p", modelID: "summary-model", ...internal,
+    } });
+  }
+  await flushReports();
+  expect(requestParam(requests.at(-1), "runtime")).toEqual({ model: "p/new" });
+});
+
+test("V2 reports runtime selections without waiting for a state change or stale cache", async () => {
+  const plugin = await loadPlugin();
+  const tui = v2Api();
+  tui.sessions.set("a", { id: "a", agent: "build", model: { providerID: "p", id: "old", variant: "high" } });
+  const dispose = plugin.setup(tui.api);
+  activeDisposers.push(dispose);
+  await flushReports();
+  expect(requestParam(requests.at(-1), "runtime")).toEqual({ model: "p/old", agent_profile: "build", variant: "high" });
+  tui.emit("session.model.selected", { sessionID: "a", model: { providerID: "p", id: "new" } });
+  await flushReports();
+  expect(requestParam(requests.at(-1), "runtime")).toEqual({ model: "p/new", agent_profile: "build" });
+  // The API cache has not caught up: polling must retain the explicit delta.
+  await new Promise((resolve) => setTimeout(resolve, 125));
+  expect(requestParam(requests.at(-1), "runtime")).toEqual({ model: "p/new", agent_profile: "build" });
+  tui.emit("session.model.selected", { sessionID: "child", model: { providerID: "p", id: "wrong" } });
+  await flushReports();
+  expect(requestParam(requests.at(-1), "runtime")).toEqual({ model: "p/new", agent_profile: "build" });
+});
 
 function familyApi() {
   const tui = fakeApi();

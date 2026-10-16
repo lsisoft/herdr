@@ -763,3 +763,10 @@ herdr agent wait w1:p1 --until blocked
 由客户端渲染的 Herdr UI 对本地和 SSH 服务器使用稳定的端点代数。客户端和服务器构建不必一致。连接时，双方会协商核心快照、屏幕、输入和 blob 编解码器，服务器则公布支持的 API 方法和可选能力。已保存的 SSH 机器需要 `surface_interest` 来确保只有选中的机器传输窗格画面，并需要 `health_check` 来发现空闲连接的故障。缺少这些能力的服务器会显示 Attention，直到明确更新。详见[连接机器](/zh-cn/docs/connecting-machines/)。缺少方法时,只禁用该服务器上的对应操作并显示客户端本地通知;操作被拒绝或超时也不会断开连接。只有早于端点第 1 代的服务器需要最后更新一次。
 
 带编号的二进制协议仍用于同一安装内的内部操作,包括直接终端连接和实时交接。跨不同构建使用这些操作前,请检查 `ping` 或 `herdr status`。JSON API 客户端应忽略未知字段,并把不支持的方法当作普通错误处理。
+
+
+## 分支的运行时恢复
+
+此分支构建原生会话恢复命令时，会保留白名单内的权限设置和已观测到的运行时设置。智能体明确报告的 `resume_argv` 优先。不保存提示词、凭据、环境变量或任意提供商配置。
+
+官方集成可向 `pane report-agent` 或 `pane report-agent-session` 传入 `--runtime-json JSON`（JSON API 字段为 `runtime`）。允许字段因提供商而异：`model`、`model_provider`、`reasoning_effort`、`reasoning_summary`、`verbosity`、`service_tier`、`context_tier`、`variant`、`agent_profile`。只读的 `agent_session.runtime` 在未知时省略，仅表示观测值，不保证恢复后实际使用的模型。旧服务器可能忽略此分支专有字段，请使用匹配的构建并读回验证。

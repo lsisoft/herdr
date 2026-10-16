@@ -49,6 +49,11 @@ impl ClientShellState {
         match section {
             ClientSettingsSection::Theme => theme_index(&self.config.theme_name),
             ClientSettingsSection::Indicators => indicator_index(self.config.status_indicators),
+            ClientSettingsSection::TabStatus => match self.config.tab_agent_status {
+                crate::config::TabAgentStatusConfig::Off => 0,
+                crate::config::TabAgentStatusConfig::Attention => 1,
+                crate::config::TabAgentStatusConfig::All => 2,
+            },
             ClientSettingsSection::Sound => usize::from(!self.config.sound_enabled),
             ClientSettingsSection::Toast => toast_index(self.config.toast_delivery),
             ClientSettingsSection::Integrations => 0,
@@ -98,6 +103,7 @@ impl ClientShellState {
             Some(ClientShellOverlay::Settings(settings)) => match settings.section {
                 ClientSettingsSection::Theme => crate::config::THEME_NAMES.len(),
                 ClientSettingsSection::Indicators | ClientSettingsSection::Sound => 2,
+                ClientSettingsSection::TabStatus => 3,
                 ClientSettingsSection::Toast => 4,
                 ClientSettingsSection::Integrations => settings.integrations.len(),
             },
@@ -209,6 +215,14 @@ impl ClientShellState {
             }
             ClientSettingsSection::Sound => {
                 self.save_settings_edit(crate::config::ConfigEdit::Sound(selected == 0), outcome);
+            }
+            ClientSettingsSection::TabStatus => {
+                let mode = match selected {
+                    0 => crate::config::TabAgentStatusConfig::Off,
+                    1 => crate::config::TabAgentStatusConfig::Attention,
+                    _ => crate::config::TabAgentStatusConfig::All,
+                };
+                self.save_settings_edit(crate::config::ConfigEdit::TabAgentStatus(mode), outcome);
             }
             ClientSettingsSection::Toast => {
                 let delivery = match selected {

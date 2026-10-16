@@ -505,3 +505,10 @@ herdr plugin pane close <pane_id>
 | `HERDR_WORKSPACE_ID` | 実行中ペインプロセスの公開ワークスペース id。 |
 | `HERDR_LOG` | ログフィルターを設定する。例: `HERDR_LOG=herdr=debug`。 |
 | `HERDR_DISABLE_SOUND` | サウンド通知が有効でも音の再生を無効にする。 |
+
+
+## フォークのランタイム復元
+
+このフォークは、ネイティブセッションの再開コマンドに、許可リスト内の権限設定と観測済みのランタイム設定を保持します。エージェントが明示的に報告した `resume_argv` が優先されます。プロンプト、認証情報、環境変数、任意のプロバイダー設定は保存しません。
+
+公式連携は `pane report-agent` または `pane report-agent-session` に `--runtime-json JSON`（JSON API では `runtime`）を渡せます。対象フィールドはプロバイダーごとの `model`、`model_provider`、`reasoning_effort`、`reasoning_summary`、`verbosity`、`service_tier`、`context_tier`、`variant`、`agent_profile` です。読み取り専用の `agent_session.runtime` は不明な場合には省略され、観測値を示すだけで、復元後の実際のモデルを保証しません。古いサーバーはこのフォーク固有のフィールドを無視する可能性があるため、対応するビルドを使い、読み戻して確認してください。

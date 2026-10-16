@@ -9,6 +9,10 @@ Herdr organizes terminals into workspaces, tabs, and panes, recognizes coding ag
 
 The `herdr` binary in `PATH` talks to the current session. Use it to inspect neighboring work, create terminal layout, start agents and commands, read output, and wait for state changes.
 
+The user may ask an agent outside Herdr to control Herdr. `HERDR_ENV=1` identifies a managed caller; it is not a requirement for an explicitly requested control task. Outside Herdr, first select the intended server with `herdr --session <name>` for a local named session or `herdr --machine <label-or-id>` for a saved machine, and use the same selector for discovery and every later command. Inspect `herdr session list` or `herdr machine list --json` when the target is unclear. If more than one target fits the request, ask which one to use before sending input.
+
+Without a managed caller, do not use `--current`, inherited `HERDR_PANE_ID` values, or focus-based defaults. Discover the target with `workspace list`, `tab list`, `pane list`, and `agent list`, then use explicit returned IDs or a unique live agent name on that server. The sibling-pane recipes below assume a managed caller: outside Herdr, replace `--current` with `--pane <chosen-pane-id>`, read its layout and working directory first, and preserve its cwd rather than the controller's `$PWD`. Keep `--no-focus` unless the user asked to switch focus.
+
 ## Learn the current CLI
 
 The installed binary is the authority for command syntax. Start with:
@@ -196,7 +200,7 @@ If a larger recent read still does not reveal the completed response, ask the ag
 ## Safety and coordination rules
 
 - Use `--no-focus` for background work unless the user asked to switch context.
-- Use `--current`, an explicit pane ID, or a unique agent name. Do not rely on another client's focused pane.
+- Use `--current` only for a verified managed caller; otherwise use an explicit pane ID or a unique agent name. Do not rely on another client's focused pane.
 - Parse IDs from JSON responses. Do not derive them from sidebar order or examples.
 - Do not close workspaces, tabs, panes, or sessions you did not create unless the user explicitly asked. Ordinary CLI/API closes do not inherit the TUI's last-pane confirmation. `workspace close --group` closes the primary workspace and its linked worktree workspaces; never add it merely to bypass `workspace_group_close_required`.
 - Use `--trust-repository` only after the user has verified the repository. It grants per-request Git trust; it is not a routine retry for a failed worktree command.

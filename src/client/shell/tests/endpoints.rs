@@ -2383,6 +2383,7 @@ fn disconnected_active_endpoint_freezes_surface_and_marks_cached_ui_stale() {
 
     let (mut state, endpoint_id) = state_with_remote();
     state.config.status_indicators = StatusIndicatorStyle::Symbols;
+    state.config.tab_agent_status = crate::config::TabAgentStatusConfig::All;
     state.config.agents.rows = vec![vec![
         AgentSidebarToken::StateIcon,
         AgentSidebarToken::Machine,

@@ -142,6 +142,12 @@ fn run_session_save_job(
     };
     match job {
         SessionSaveJob::Clear => writer.clear(),
-        SessionSaveJob::Save { snapshot, history } => writer.save(&snapshot, history.as_ref()),
+        SessionSaveJob::Save {
+            mut snapshot,
+            mut history,
+        } => {
+            crate::persist::enrich_native_runtime(&mut snapshot, history.as_mut());
+            writer.save(&snapshot, history.as_ref());
+        }
     }
 }

@@ -21,6 +21,7 @@ pub(crate) struct ClientShellConfig {
     pub(super) mobile_width_threshold: u16,
     pub(super) tab_bar_position: TabBarPositionConfig,
     pub(super) hide_tab_bar_when_single_tab: bool,
+    pub(super) tab_agent_status: crate::config::TabAgentStatusConfig,
     pub(super) spaces: SpacesSidebarConfig,
     pub(super) agents: crate::config::AgentsSidebarConfig,
     pub(super) agent_panel_sort: crate::config::AgentPanelSortConfig,
@@ -385,6 +386,7 @@ pub(super) struct ClientGlobalMenuOverlay {
 pub(super) enum ClientSettingsSection {
     Theme,
     Indicators,
+    TabStatus,
     Sound,
     Toast,
     Integrations,
@@ -394,6 +396,7 @@ impl ClientSettingsSection {
     pub(super) const ALL: &[Self] = &[
         Self::Theme,
         Self::Indicators,
+        Self::TabStatus,
         Self::Sound,
         Self::Toast,
         Self::Integrations,
@@ -403,6 +406,7 @@ impl ClientSettingsSection {
         match self {
             Self::Theme => "theme",
             Self::Indicators => "indicators",
+            Self::TabStatus => "tabs",
             Self::Sound => "sound",
             Self::Toast => "toasts",
             Self::Integrations => "integrations",

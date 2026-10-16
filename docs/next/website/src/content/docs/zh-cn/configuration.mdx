@@ -355,6 +355,20 @@ status_indicators = "symbols"
 
 这些符号是静态的，因此该选项不会启用旋转动画。
 
+### 标签页的智能体状态
+
+此分支支持 **Settings → tabs**，或以下配置：
+
+```toml
+[ui]
+tab_agent_status = "attention"
+status_indicators = "symbols"
+```
+
+默认为 `"off"`。`"attention"` 显示 blocked 和未查看的 done；`"all"` 还显示 working 和 idle。unknown 不显示标记。标记静止，复用侧边栏的符号、主题颜色和聚合优先级。完成状态的确认沿用每个客户端各自的规则。
+
+无论侧边栏展开、收起还是隐藏，顶部或底部标签栏均可显示。选中标签的文字保留高亮，标记使用中性背景。固定宽度的标记区避免状态变化时文字移动。配置实时生效，与声音和通知独立。要在只有一个标签时保留状态，请保持 `hide_tab_bar_when_single_tab = false`。
+
 ### 侧边栏行布局
 
 展开的桌面侧边栏会将 `rows` 中的每个内层数组渲染为一行。以下是完整的默认布局：
@@ -364,7 +378,7 @@ status_indicators = "symbols"
 row_gap = 0
 rows = [
   ["state_icon", "machine", "workspace", "tab"],
-  ["agent"],
+  ["pane", "agent"],
 ]
 
 [ui.sidebar.spaces]
@@ -608,3 +622,8 @@ switch_ascii_input_source_in_prefix = true
 ```
 
 日志会自动轮转。报告问题时，请附上当前日志和轮转后的同级日志文件。
+
+
+## 分支的运行时恢复
+
+此分支构建原生会话恢复命令时，会保留白名单内的权限设置和已观测到的运行时设置。智能体明确报告的 `resume_argv` 优先。不保存提示词、凭据、环境变量或任意提供商配置。

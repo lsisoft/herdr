@@ -359,6 +359,20 @@ status_indicators = "symbols"
 
 The symbols are static, so this option does not enable spinner animation.
 
+### Agent status on tabs
+
+In this fork, choose **tabs** in Settings or configure:
+
+```toml
+[ui]
+tab_agent_status = "attention"
+status_indicators = "symbols"
+```
+
+`tab_agent_status` defaults to `"off"`. `"attention"` shows blocked and unseen completed agents; `"all"` also shows working and idle agents. Unknown state has no marker. Markers are static and use the same dots/symbols, theme colors, and aggregate priority as the sidebar: blocked, unseen done, working, idle, unknown. Viewing a completed pane follows the existing per-client acknowledgement behaviour.
+
+Markers appear before each tab label with the sidebar open, compact, or hidden, and with the tab row at the top or bottom. A neutral marker gutter preserves its color on selected tabs while the label keeps its focus highlight. The gutter keeps a fixed width as states change. Config edits apply live. Existing toast and sound choices remain independent. To keep status visible for a single tab, leave `hide_tab_bar_when_single_tab = false`.
+
 ### Sidebar row layouts
 
 The expanded desktop sidebar renders each inner array in `rows` as one line. These are the complete default layouts:
@@ -368,7 +382,7 @@ The expanded desktop sidebar renders each inner array in `rows` as one line. The
 row_gap = 0
 rows = [
   ["state_icon", "machine", "workspace", "tab"],
-  ["agent"],
+  ["pane", "agent"],
 ]
 
 [ui.sidebar.spaces]

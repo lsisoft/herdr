@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{BufRead, BufReader, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
@@ -305,19 +305,88 @@ enum SessionFormat {
 
 struct CachedRuntime {
     offset: u64,
+    observation: NativeRuntimeObservation,
+}
+
+/// Partial native observations distinguish an absent field from an explicit
+/// null. This stays internal; persisted/API profiles remain plain settings.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct NativeRuntimeObservation {
     settings: AgentRuntimeSettings,
+    cleared: HashSet<&'static str>,
+}
+
+impl NativeRuntimeObservation {
+    pub(crate) fn apply_to(&self, older: AgentRuntimeSettings) -> AgentRuntimeSettings {
+        let mut combined = older.merged(self.settings.clone());
+        for field in &self.cleared {
+            if let Some(target) = runtime_field_mut(&mut combined, field) {
+                *target = None;
+            }
+        }
+        combined
+    }
+}
+
+fn runtime_field_mut<'a>(
+    settings: &'a mut AgentRuntimeSettings,
+    field: &str,
+) -> Option<&'a mut Option<String>> {
+    Some(match field {
+        "model" => &mut settings.model,
+        "model_provider" => &mut settings.model_provider,
+        "reasoning_effort" => &mut settings.reasoning_effort,
+        "reasoning_summary" => &mut settings.reasoning_summary,
+        "verbosity" => &mut settings.verbosity,
+        "service_tier" => &mut settings.service_tier,
+        "context_tier" => &mut settings.context_tier,
+        "variant" => &mut settings.variant,
+        "agent_profile" => &mut settings.agent_profile,
+        _ => return None,
+    })
 }
 
 static SESSION_PATH_CACHE: OnceLock<Mutex<HashMap<String, PathBuf>>> = OnceLock::new();
 static SESSION_RUNTIME_CACHE: OnceLock<Mutex<HashMap<PathBuf, CachedRuntime>>> = OnceLock::new();
+static NATIVE_OBSERVATIONS: OnceLock<Mutex<HashMap<String, NativeRuntimeObservation>>> =
+    OnceLock::new();
 
-/// Read provider-owned session state so interactive model changes are captured,
-/// even when they are absent from the process argv.
-pub fn from_native_session(
+fn native_observation_key(source: &str, agent: &str, session_id: &str) -> Option<String> {
+    let root = match (source, agent) {
+        ("herdr:codex", "codex") => crate::integration::codex_dir().ok()?,
+        ("herdr:claude", "claude") => crate::integration::claude_dir().ok()?,
+        ("herdr:copilot", "copilot") => crate::integration::copilot_dir().ok()?,
+        _ => return None,
+    };
+    Some(format!("{source}\0{}\0{session_id}", root.display()))
+}
+
+/// Snapshot capture may read only an already-enriched value. Never wait for a
+/// worker holding a cache lock or perform transcript/filesystem work here.
+pub(crate) fn cached_native_session(
     source: &str,
     agent: &str,
     session_ref: &crate::agent_resume::AgentSessionRef,
-) -> Option<AgentRuntimeSettings> {
+) -> Option<NativeRuntimeObservation> {
+    if session_ref.kind != crate::agent_resume::AgentSessionRefKind::Id {
+        return None;
+    }
+    let key = native_observation_key(source, agent, &session_ref.value)?;
+    NATIVE_OBSERVATIONS
+        .get()?
+        .try_lock()
+        .ok()?
+        .get(&key)
+        .cloned()
+}
+
+/// Read provider-owned session state so interactive model changes are captured,
+/// even when they are absent from the process argv.
+pub(crate) fn from_native_session(
+    source: &str,
+    agent: &str,
+    session_ref: &crate::agent_resume::AgentSessionRef,
+) -> Option<NativeRuntimeObservation> {
     if session_ref.kind != crate::agent_resume::AgentSessionRefKind::Id {
         return None;
     }
@@ -359,7 +428,14 @@ pub fn from_native_session(
         _ => return None,
     };
 
-    cached_jsonl_runtime(&path, format)?.validated(source, agent)
+    let observation = cached_jsonl_runtime(&path, format)?;
+    let key = native_observation_key(source, agent, session_id)?;
+    NATIVE_OBSERVATIONS
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .ok()?
+        .insert(key, observation.clone());
+    Some(observation)
 }
 
 fn cached_session_path<F>(provider: &str, root: &Path, session_id: &str, find: F) -> Option<PathBuf>
@@ -421,7 +497,7 @@ fn find_session_file(root: &Path, session_id: &str, exact_name: bool) -> Option<
     None
 }
 
-fn cached_jsonl_runtime(path: &Path, format: SessionFormat) -> Option<AgentRuntimeSettings> {
+fn cached_jsonl_runtime(path: &Path, format: SessionFormat) -> Option<NativeRuntimeObservation> {
     let metadata = path.metadata().ok()?;
     let cache = SESSION_RUNTIME_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
     let mut cache = cache.lock().ok()?;
@@ -429,18 +505,19 @@ fn cached_jsonl_runtime(path: &Path, format: SessionFormat) -> Option<AgentRunti
         .entry(path.to_path_buf())
         .or_insert_with(|| CachedRuntime {
             offset: 0,
-            settings: AgentRuntimeSettings::default(),
+            observation: NativeRuntimeObservation::default(),
         });
     if metadata.len() < entry.offset {
         entry.offset = 0;
-        entry.settings = AgentRuntimeSettings::default();
+        entry.observation = NativeRuntimeObservation::default();
     }
 
     let mut file = File::open(path).ok()?;
     file.seek(SeekFrom::Start(entry.offset)).ok()?;
     let mut reader = BufReader::new(file);
     scan_complete_lines(&mut reader, entry, format).ok()?;
-    (!entry.settings.is_empty()).then(|| entry.settings.clone())
+    (!entry.observation.settings.is_empty() || !entry.observation.cleared.is_empty())
+        .then(|| entry.observation.clone())
 }
 
 fn scan_complete_lines<R: BufRead>(
@@ -478,7 +555,7 @@ fn scan_complete_lines<R: BufRead>(
             continue;
         }
         if !line_overflowed {
-            parse_runtime_line(&line, format, &mut cached.settings);
+            parse_runtime_line(&line, format, &mut cached.observation);
         }
         cached.offset = consumed;
         line_start = consumed;
@@ -487,7 +564,7 @@ fn scan_complete_lines<R: BufRead>(
     }
 }
 
-fn parse_runtime_line(line: &[u8], format: SessionFormat, settings: &mut AgentRuntimeSettings) {
+fn parse_runtime_line(line: &[u8], format: SessionFormat, settings: &mut NativeRuntimeObservation) {
     let candidate = match format {
         SessionFormat::Codex => {
             contains_bytes(line, b"thread_settings_applied")
@@ -525,14 +602,14 @@ fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {
             .any(|window| window == needle)
 }
 
-fn parse_codex_event(value: &serde_json::Value, settings: &mut AgentRuntimeSettings) {
+fn parse_codex_event(value: &serde_json::Value, settings: &mut NativeRuntimeObservation) {
     if value.get("type").and_then(serde_json::Value::as_str) == Some("turn_context") {
         let Some(payload) = value.get("payload").and_then(serde_json::Value::as_object) else {
             return;
         };
-        set_string_if_present(&mut settings.model, payload, "model");
-        set_string_if_present(&mut settings.reasoning_effort, payload, "effort");
-        set_string_if_present(&mut settings.reasoning_summary, payload, "summary");
+        set_string_if_present(settings, "model", payload, "model");
+        set_string_if_present(settings, "reasoning_effort", payload, "effort");
+        set_string_if_present(settings, "reasoning_summary", payload, "summary");
         return;
     }
     if value
@@ -548,37 +625,29 @@ fn parse_codex_event(value: &serde_json::Value, settings: &mut AgentRuntimeSetti
     else {
         return;
     };
-    set_string_if_present(&mut settings.model, thread, "model");
-    set_string_if_present(&mut settings.model_provider, thread, "model_provider_id");
-    set_string_if_present(&mut settings.reasoning_effort, thread, "reasoning_effort");
-    set_string_if_present(&mut settings.service_tier, thread, "service_tier");
+    set_string_if_present(settings, "model", thread, "model");
+    set_string_if_present(settings, "model_provider", thread, "model_provider_id");
+    set_string_if_present(settings, "reasoning_effort", thread, "reasoning_effort");
+    set_string_if_present(settings, "service_tier", thread, "service_tier");
 }
 
-fn parse_claude_event(value: &serde_json::Value, settings: &mut AgentRuntimeSettings) {
+fn parse_claude_event(value: &serde_json::Value, settings: &mut NativeRuntimeObservation) {
     let event_type = value.get("type").and_then(serde_json::Value::as_str);
     if event_type == Some("assistant") {
-        if let Some(model) = value
-            .pointer("/message/model")
-            .and_then(serde_json::Value::as_str)
-            .filter(|model| valid_runtime_value(model))
-        {
-            settings.model = Some(model.to_string());
+        if let Some(message) = value.get("message").and_then(serde_json::Value::as_object) {
+            set_string_if_present(settings, "model", message, "model");
         }
     } else if value.get("subtype").and_then(serde_json::Value::as_str) == Some("init") {
         if let Some(object) = value.as_object() {
-            set_string_if_present(&mut settings.model, object, "model");
+            set_string_if_present(settings, "model", object, "model");
         }
     }
-    if let Some(effort) = value
-        .pointer("/effort/level")
-        .and_then(serde_json::Value::as_str)
-        .filter(|effort| valid_runtime_value(effort))
-    {
-        settings.reasoning_effort = Some(effort.to_string());
+    if let Some(effort) = value.get("effort").and_then(serde_json::Value::as_object) {
+        set_string_if_present(settings, "reasoning_effort", effort, "level");
     }
 }
 
-fn parse_copilot_event(value: &serde_json::Value, settings: &mut AgentRuntimeSettings) {
+fn parse_copilot_event(value: &serde_json::Value, settings: &mut NativeRuntimeObservation) {
     let Some(event_type) = value.get("type").and_then(serde_json::Value::as_str) else {
         return;
     };
@@ -587,38 +656,47 @@ fn parse_copilot_event(value: &serde_json::Value, settings: &mut AgentRuntimeSet
     };
     match event_type {
         "session.start" | "session.resume" => {
-            set_string_if_present(&mut settings.model, data, "selectedModel");
-            set_string_if_present(&mut settings.reasoning_effort, data, "reasoningEffort");
-            set_string_if_present(&mut settings.reasoning_summary, data, "reasoningSummary");
-            set_string_if_present(&mut settings.verbosity, data, "verbosity");
-            set_string_if_present(&mut settings.context_tier, data, "contextTier");
+            set_string_if_present(settings, "model", data, "selectedModel");
+            set_string_if_present(settings, "reasoning_effort", data, "reasoningEffort");
+            set_string_if_present(settings, "reasoning_summary", data, "reasoningSummary");
+            set_string_if_present(settings, "verbosity", data, "verbosity");
+            set_string_if_present(settings, "context_tier", data, "contextTier");
         }
         "session.model_change" => {
-            set_string_if_present(&mut settings.model, data, "newModel");
-            set_string_if_present(&mut settings.reasoning_effort, data, "reasoningEffort");
-            set_string_if_present(&mut settings.reasoning_summary, data, "reasoningSummary");
-            set_string_if_present(&mut settings.verbosity, data, "verbosity");
-            set_string_if_present(&mut settings.context_tier, data, "contextTier");
+            set_string_if_present(settings, "model", data, "newModel");
+            set_string_if_present(settings, "reasoning_effort", data, "reasoningEffort");
+            set_string_if_present(settings, "reasoning_summary", data, "reasoningSummary");
+            set_string_if_present(settings, "verbosity", data, "verbosity");
+            set_string_if_present(settings, "context_tier", data, "contextTier");
         }
         "session.shutdown" => {
-            set_string_if_present(&mut settings.model, data, "currentModel");
+            set_string_if_present(settings, "model", data, "currentModel");
         }
         _ => {}
     }
 }
 
 fn set_string_if_present(
-    target: &mut Option<String>,
+    observation: &mut NativeRuntimeObservation,
+    field: &'static str,
     object: &serde_json::Map<String, serde_json::Value>,
     key: &str,
 ) {
     let Some(value) = object.get(key) else {
         return;
     };
-    *target = value
-        .as_str()
-        .filter(|value| valid_runtime_value(value))
-        .map(str::to_string);
+    let parsed = if value.is_null() {
+        observation.cleared.insert(field);
+        None
+    } else if let Some(text) = value.as_str().filter(|text| valid_runtime_value(text)) {
+        observation.cleared.remove(field);
+        Some(text.to_owned())
+    } else {
+        return;
+    };
+    if let Some(target) = runtime_field_mut(&mut observation.settings, field) {
+        *target = parsed;
+    }
 }
 
 #[cfg(test)]
@@ -628,6 +706,74 @@ mod tests {
 
     fn strings(values: &[&str]) -> Vec<String> {
         values.iter().map(|value| (*value).to_string()).collect()
+    }
+
+    #[test]
+    fn explicit_native_nulls_override_older_values_but_absent_fields_do_not() {
+        let older = AgentRuntimeSettings {
+            model: Some("old-model".into()),
+            reasoning_effort: Some("high".into()),
+            reasoning_summary: Some("concise".into()),
+            service_tier: Some("fast".into()),
+            ..AgentRuntimeSettings::default()
+        };
+        let mut observation = NativeRuntimeObservation::default();
+        parse_codex_event(
+            &serde_json::json!({"type":"event_msg","payload":{
+                "type":"thread_settings_applied","thread_settings":{
+                    "model":"new-model","reasoning_effort":null,"service_tier":null
+                }
+            }}),
+            &mut observation,
+        );
+        let combined = observation.apply_to(older.clone());
+        assert_eq!(combined.model.as_deref(), Some("new-model"));
+        assert_eq!(combined.reasoning_effort, None);
+        assert_eq!(combined.service_tier, None);
+        assert_eq!(combined.reasoning_summary, older.reasoning_summary);
+        assert!(!combined
+            .resume_args("herdr:codex", "codex")
+            .iter()
+            .any(|arg| arg.contains("service_tier") || arg.contains("reasoning_effort")));
+        parse_codex_event(
+            &serde_json::json!({"type":"turn_context","payload":{
+                "effort":"low","summary":null
+            }}),
+            &mut observation,
+        );
+        let combined = observation.apply_to(older);
+        assert_eq!(combined.reasoning_effort.as_deref(), Some("low"));
+        assert_eq!(combined.reasoning_summary, None);
+        assert_eq!(combined.service_tier, None);
+    }
+
+    #[test]
+    fn copilot_and_claude_observations_preserve_null_resets() {
+        let older = AgentRuntimeSettings {
+            model: Some("old".into()),
+            reasoning_effort: Some("high".into()),
+            context_tier: Some("long".into()),
+            ..AgentRuntimeSettings::default()
+        };
+        let mut observation = NativeRuntimeObservation::default();
+        parse_copilot_event(
+            &serde_json::json!({"type":"session.model_change","data":{
+                "newModel":null,"reasoningEffort":null,"contextTier":null
+            }}),
+            &mut observation,
+        );
+        assert_eq!(
+            observation.apply_to(older.clone()),
+            AgentRuntimeSettings::default()
+        );
+        let mut observation = NativeRuntimeObservation::default();
+        parse_claude_event(
+            &serde_json::json!({"type":"assistant","message":{"model":null},"effort":{"level":null}}),
+            &mut observation,
+        );
+        let combined = observation.apply_to(older);
+        assert_eq!(combined.model, None);
+        assert_eq!(combined.reasoning_effort, None);
     }
 
     #[test]
@@ -823,7 +969,8 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            cached_jsonl_runtime(&codex_path, SessionFormat::Codex),
+            cached_jsonl_runtime(&codex_path, SessionFormat::Codex)
+                .map(|observation| observation.settings),
             Some(AgentRuntimeSettings {
                 model: Some("gpt-new".into()),
                 model_provider: Some("openai".into()),
@@ -843,7 +990,9 @@ mod tests {
             "{{\"type\":\"turn_context\",\"payload\":{{\"model\":\"gpt-latest\",\"effort\":\"max\"}}}}"
         )
         .unwrap();
-        let latest = cached_jsonl_runtime(&codex_path, SessionFormat::Codex).unwrap();
+        let latest = cached_jsonl_runtime(&codex_path, SessionFormat::Codex)
+            .map(|observation| observation.settings)
+            .unwrap();
         assert_eq!(latest.model.as_deref(), Some("gpt-latest"));
         assert_eq!(latest.reasoning_effort.as_deref(), Some("max"));
         assert_eq!(latest.reasoning_summary.as_deref(), Some("concise"));
@@ -859,7 +1008,8 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            cached_jsonl_runtime(&copilot_path, SessionFormat::Copilot),
+            cached_jsonl_runtime(&copilot_path, SessionFormat::Copilot)
+                .map(|observation| observation.settings),
             Some(AgentRuntimeSettings {
                 model: Some("gpt-5.4".into()),
                 reasoning_effort: Some("xhigh".into()),
@@ -880,7 +1030,8 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            cached_jsonl_runtime(&claude_path, SessionFormat::Claude),
+            cached_jsonl_runtime(&claude_path, SessionFormat::Claude)
+                .map(|observation| observation.settings),
             Some(AgentRuntimeSettings {
                 model: Some("claude-opus-4-6".into()),
                 reasoning_effort: Some("high".into()),

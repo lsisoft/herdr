@@ -44,9 +44,10 @@ pub(crate) use crate::cli::projection::{boolean, optional_text};
 
 pub(crate) fn runtime() -> Input<Option<crate::agent_runtime::AgentRuntimeSettings>> {
     Input::value("runtime-json", "JSON", |slot, value| {
-        *slot = Some(serde_json::from_str(value).map_err(|error| {
-            ParseError::Usage(format!("invalid --runtime-json: {error}"))
-        })?);
+        *slot = Some(
+            serde_json::from_str(value)
+                .map_err(|error| ParseError::Usage(format!("invalid --runtime-json: {error}")))?,
+        );
         Ok(())
     })
 }

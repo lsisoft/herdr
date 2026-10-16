@@ -5,13 +5,13 @@ description: 为 Claude Code 或其他编程智能体安装 Herdr 使用说明�
 
 Herdr 提供了一个可复用的智能体技能文件: [`skills/herdr/SKILL.md`](https://github.com/herdrdev/herdr/blob/master/skills/herdr/SKILL.md)。
 
-把这个文件安装到任何支持可复用技能或自定义指令的编程智能体中。这份技能教智能体如何在 Herdr 窗格内部控制 Herdr。
+把这个文件安装到任何支持可复用技能或自定义指令的编程智能体中。此分支也支持用户明确请求的 Herdr 外部控制。
 
 Herdr 还提供了另一份用途不同的指南: [`herdr.dev/agent-guide.md`](https://herdr.dev/agent-guide.md),用于让智能体帮助人类学习、安装或排查 Herdr。技能是给操作 Herdr 的智能体用的;指南是给教人类的智能体用的。
 
 ## 这份技能做什么
 
-这份技能告诉智能体: 当 `HERDR_ENV=1` 已设置时,使用 `herdr` CLI。这意味着智能体运行在 Herdr 管理的窗格内,可以安全地与本地 Herdr socket 通信。
+此技能使用 `HERDR_ENV=1` 识别受管理的调用方。外部控制方应先选择命名会话或已保存的机器，查询实时对象，再使用明确的窗格 ID 或唯一的智能体名称。
 
 安装技能后,智能体可以:
 
@@ -52,11 +52,11 @@ claude
 
 也可以在 Herdr 窗格里使用任何其他编程智能体。重点是智能体进程要运行在 Herdr 内部,这样 `HERDR_ENV=1` 才可用。
 
-## 安全规则
+## 选择控制目标
 
-这份技能以一条护栏开头: 如果 `HERDR_ENV=1` 未设置,智能体应当停下来,并说明自己没有运行在 Herdr 管理的窗格内。
+外部控制方必须在每条命令中保留选择的会话或机器。不得用 `--current`、继承的调用方 ID 或其他客户端的焦点选择目标。
 
-这可以防止 Herdr 外部的智能体试图控制一个不属于它的会话。
+如果多个会话符合请求，发送输入前应询问用户。此行为需要[分支技能](https://github.com/lsisoft/herdr/blob/custom/herdr/skills/herdr/SKILL.md)；上面的 upstream 安装命令安装的是 upstream 自己的策略。
 
 ## 面向智能体的参考
 

@@ -505,3 +505,10 @@ herdr plugin pane close <pane_id>
 | `HERDR_WORKSPACE_ID` | 运行中窗格进程的公开工作区 id。 |
 | `HERDR_LOG` | 设置日志过滤,例如 `HERDR_LOG=herdr=debug`。 |
 | `HERDR_DISABLE_SOUND` | 即使启用了声音通知也禁用声音播放。 |
+
+
+## 分支的运行时恢复
+
+此分支构建原生会话恢复命令时，会保留白名单内的权限设置和已观测到的运行时设置。智能体明确报告的 `resume_argv` 优先。不保存提示词、凭据、环境变量或任意提供商配置。
+
+官方集成可向 `pane report-agent` 或 `pane report-agent-session` 传入 `--runtime-json JSON`（JSON API 字段为 `runtime`）。允许字段因提供商而异：`model`、`model_provider`、`reasoning_effort`、`reasoning_summary`、`verbosity`、`service_tier`、`context_tier`、`variant`、`agent_profile`。只读的 `agent_session.runtime` 在未知时省略，仅表示观测值，不保证恢复后实际使用的模型。旧服务器可能忽略此分支专有字段，请使用匹配的构建并读回验证。

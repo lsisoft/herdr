@@ -116,6 +116,35 @@ pub enum StatusIndicatorStyle {
     Symbols,
 }
 
+/// Which aggregate agent states are shown in the desktop tab row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum TabAgentStatusConfig {
+    #[default]
+    Off,
+    Attention,
+    All,
+}
+
+impl TabAgentStatusConfig {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Attention => "attention",
+            Self::All => "all",
+        }
+    }
+
+    pub fn shows(self, status: crate::api::schema::AgentStatus) -> bool {
+        use crate::api::schema::AgentStatus;
+        match self {
+            Self::Off => false,
+            Self::Attention => matches!(status, AgentStatus::Blocked | AgentStatus::Done),
+            Self::All => status != AgentStatus::Unknown,
+        }
+    }
+}
+
 impl StatusIndicatorStyle {
     pub fn as_str(self) -> &'static str {
         match self {
@@ -982,6 +1011,8 @@ pub struct UiConfig {
     pub show_agent_labels_on_pane_borders: bool,
     /// Hide the tab row when the workspace has one tab. Default: false.
     pub hide_tab_bar_when_single_tab: bool,
+    /// Aggregate agent state markers in desktop tabs. Default: off.
+    pub tab_agent_status: TabAgentStatusConfig,
     /// Desktop tab row placement. Default: top.
     pub tab_bar_position: TabBarPositionConfig,
     /// Ordered entries shown at the right edge of the desktop tab row. Empty by default.
@@ -1219,6 +1250,7 @@ impl Default for UiConfig {
             pane_gaps: true,
             show_agent_labels_on_pane_borders: false,
             hide_tab_bar_when_single_tab: false,
+            tab_agent_status: TabAgentStatusConfig::Off,
             tab_bar_position: TabBarPositionConfig::Top,
             tab_bar_right: Vec::new(),
             tab_bar_right_separator: " ".into(),
@@ -1490,6 +1522,24 @@ status_indicators = "symbols"
         )
         .unwrap();
         assert_eq!(config.ui.status_indicators, StatusIndicatorStyle::Symbols);
+    }
+
+    #[test]
+    fn tab_agent_status_modes_default_off_and_parse() {
+        assert_eq!(
+            Config::default().ui.tab_agent_status,
+            TabAgentStatusConfig::Off
+        );
+        for (value, expected) in [
+            ("off", TabAgentStatusConfig::Off),
+            ("attention", TabAgentStatusConfig::Attention),
+            ("all", TabAgentStatusConfig::All),
+        ] {
+            let config: Config =
+                toml::from_str(&format!("[ui]\ntab_agent_status = {value:?}")).unwrap();
+            assert_eq!(config.ui.tab_agent_status, expected);
+        }
+        assert!(toml::from_str::<Config>("[ui]\ntab_agent_status = 'blinking'").is_err());
     }
 
     #[test]

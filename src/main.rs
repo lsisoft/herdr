@@ -315,6 +315,7 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # Hide the tab row when a workspace has exactly one tab.
 # New tabs can still be created with the configured keybinding.
 # hide_tab_bar_when_single_tab = false
+# tab_agent_status = "off" # "off", "attention", or "all"; static aggregate status per tab
 
 # Desktop tab row placement: "top" or "bottom".
 # tab_bar_position = "top"

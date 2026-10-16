@@ -416,8 +416,9 @@ pub fn access_from_argv(source: &str, agent: &str, argv: &[String]) -> Option<Ag
         ),
         "claude" => collect_access_args(
             &argv[start + 1..],
-            &["--permission-mode", "--permission-prompt-tool", "--tools"],
+            &["--permission-mode", "--permission-prompt-tool"],
             &[
+                "--tools",
                 "--add-dir",
                 "--allowedTools",
                 "--allowed-tools",
@@ -496,7 +497,7 @@ fn collect_access_args(
             collected.push(arg.clone());
         } else if let Some((flag, value)) = arg.split_once('=') {
             if (value_flags.contains(&flag) || variadic_value_flags.contains(&flag))
-                && valid_access_value(value)
+                && valid_access_flag_value(flag, value)
             {
                 collected.push(arg.clone());
             }
@@ -506,7 +507,7 @@ fn collect_access_args(
             while next < argv.len()
                 && argv[next] != "--"
                 && !argv[next].starts_with('-')
-                && valid_access_value(&argv[next])
+                && valid_access_flag_value(arg, &argv[next])
             {
                 next += 1;
             }
@@ -535,6 +536,12 @@ fn valid_access_value(value: &str) -> bool {
         && value.len() <= 4096
         && !value.starts_with('-')
         && !value.chars().any(char::is_control)
+}
+
+fn valid_access_flag_value(flag: &str, value: &str) -> bool {
+    // Claude's empty tool list explicitly disables all tools. Dropping it
+    // would grant tools back, especially with a retained bypass flag.
+    (flag == "--tools" && value.is_empty()) || valid_access_value(value)
 }
 
 pub fn dedupe_key(source: &str, agent: &str, session_ref: &AgentSessionRef) -> String {
@@ -596,6 +603,28 @@ mod tests {
 
     fn argv(parts: &[&str]) -> Vec<String> {
         parts.iter().map(|part| part.to_string()).collect()
+    }
+
+    #[test]
+    fn claude_tools_empty_and_variadic_survive_capture_revalidation_and_resume() {
+        for tools in [
+            argv(&["--tools", ""]),
+            argv(&["--tools="]),
+            argv(&["--tools", "Read", "Grep"]),
+        ] {
+            let mut launch = argv(&["claude", "--dangerously-skip-permissions"]);
+            launch.extend(tools);
+            let profile = access_from_argv("herdr:claude", "claude", &launch).unwrap();
+            let validated = profile.validated("herdr:claude", "claude").unwrap();
+            let plan = plan_with_access(
+                "herdr:claude",
+                "claude",
+                &AgentSessionRef::id("session").unwrap(),
+                Some(&validated),
+            )
+            .unwrap();
+            assert_eq!(&plan.argv[3..], &launch[1..]);
+        }
     }
 
     #[test]

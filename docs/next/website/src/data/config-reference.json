@@ -1051,6 +1051,13 @@
           ]
         },
         {
+          "key": "ui.tab_agent_status",
+          "type": "enum",
+          "default": "\"off\"",
+          "description": "Show static aggregate agent status before tab labels: off, attention (blocked and unseen done), or all known states.",
+          "values": ["off", "attention", "all"]
+        },
+        {
           "key": "ui.status_indicators",
           "type": "enum",
           "default": "\"dots\"",
